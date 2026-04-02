@@ -188,7 +188,7 @@ export default definePluginEntry({
 
       registerPluginHttpRoute({
         path: "/homeassistant/ws",
-        auth: "none",
+        auth: "gateway",
         pluginId: "homeassistant",
         handler(req, res) {
           // Handle WebSocket upgrade within the regular HTTP request pipeline.

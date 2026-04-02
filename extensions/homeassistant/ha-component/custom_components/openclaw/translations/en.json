@@ -1,0 +1,14 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to OpenClaw",
+        "description": "Enter your OpenClaw gateway details.",
+        "data": {
+          "ws_url": "WebSocket URL",
+          "secret": "Shared Secret"
+        }
+      }
+    }
+  }
+}
