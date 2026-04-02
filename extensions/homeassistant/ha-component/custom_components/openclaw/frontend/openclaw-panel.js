@@ -1666,6 +1666,12 @@ class OpenClawPanel extends HTMLElement {
     const userId = this._hass?.user?.id || "";
     const userName = encodeURIComponent(this._hass?.user?.name || "");
 
+    // Auto-upgrade ws:// to wss:// when the page is served over HTTPS
+    // (browsers block mixed content: ws:// from https:// pages).
+    if (url.startsWith("ws://") && window.location.protocol === "https:") {
+      url = "wss://" + url.slice(5);
+    }
+
     const sep = url.includes("?") ? "&" : "?";
     return `${url}${sep}secret=${encodeURIComponent(secret)}&user_id=${encodeURIComponent(userId)}&user_name=${userName}`;
   }

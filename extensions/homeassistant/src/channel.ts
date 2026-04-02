@@ -5,7 +5,9 @@
  * with lifecycle management (start/stop) and status reporting.
  */
 
-import { createServer, type Server } from "node:http";
+import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { createServer as createTlsServer } from "node:https";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
@@ -25,6 +27,8 @@ export interface ResolvedHaAccount {
   secret: string;
   admins: string[];
   wsPort: number;
+  tlsCert?: string;
+  tlsKey?: string;
 }
 
 function getPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
@@ -53,6 +57,8 @@ function resolveAccount(cfg: OpenClawConfig, _accountId?: string | null): Resolv
     secret: (config.secret as string) ?? "",
     admins: (config.admins as string[]) ?? [],
     wsPort: (config.ws_port as number) ?? DEFAULT_WS_PORT,
+    tlsCert: (config.tls_cert as string) ?? undefined,
+    tlsKey: (config.tls_key as string) ?? undefined,
   };
 }
 
@@ -147,14 +153,28 @@ export function createHomeAssistantPlugin(): HaChannelPlugin {
           const storeDir = join(homedir(), ".openclaw", "homeassistant", "conversations");
           const conversationStore = new ConversationStore(storeDir);
 
-          // Create a dedicated HTTP server for WebSocket upgrades.
+          // Create a dedicated HTTP(S) server for WebSocket upgrades.
           // The gateway intercepts WS upgrades on its own HTTP server,
           // so plugins that need WebSocket must bind their own listener
           // (same pattern as the voice-call plugin).
-          const httpServer = createServer((_req, res) => {
-            res.writeHead(426, { "Content-Type": "text/plain" });
-            res.end("Upgrade Required");
-          });
+          // Use TLS when cert/key paths are configured (required for wss://
+          // from HTTPS pages due to browser mixed-content policy).
+          const useTls = account.tlsCert && account.tlsKey;
+          const httpServer = useTls
+            ? createTlsServer(
+                {
+                  cert: readFileSync(account.tlsCert!),
+                  key: readFileSync(account.tlsKey!),
+                },
+                (_req, res) => {
+                  res.writeHead(426, { "Content-Type": "text/plain" });
+                  res.end("Upgrade Required");
+                },
+              )
+            : createServer((_req, res) => {
+                res.writeHead(426, { "Content-Type": "text/plain" });
+                res.end("Upgrade Required");
+              });
 
           const wss = new WebSocketServer({ noServer: true });
 
@@ -178,8 +198,9 @@ export function createHomeAssistantPlugin(): HaChannelPlugin {
           await new Promise<void>((resolve, reject) => {
             httpServer.on("error", reject);
             httpServer.listen(account.wsPort, "0.0.0.0", () => {
+              const proto = useTls ? "wss" : "ws";
               log?.info?.(
-                `Home Assistant WebSocket channel listening on ws://0.0.0.0:${account.wsPort}`,
+                `Home Assistant WebSocket channel listening on ${proto}://0.0.0.0:${account.wsPort}`,
               );
               resolve();
             });
