@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { ServerMessage, ConversationSummary, StoredMessage } from "./protocol.js";
+import type { ConversationSummary, StoredMessage } from "./protocol.js";
 import { handleHaWebSocket } from "./ws-handler.js";
 import type { HaWsHandlerDeps } from "./ws-handler.js";
 
@@ -10,7 +10,7 @@ import type { HaWsHandlerDeps } from "./ws-handler.js";
 class FakeWs extends EventEmitter {
   OPEN = 1 as const;
   readyState = 1;
-  sent: ServerMessage[] = [];
+  sent: Record<string, unknown>[] = [];
   closed: { code?: number; reason?: string } | null = null;
 
   send(data: string) {
@@ -121,7 +121,10 @@ describe("handleHaWebSocket", () => {
     ws.clientSend({ type: "list_conversations" });
     await vi.waitFor(() => expect(ws.sent).toHaveLength(1));
 
-    expect(ws.sent[0]).toEqual({ type: "conversations", list: convs });
+    expect(ws.sent[0]).toEqual({
+      type: "conversations_list",
+      conversations: [{ id: "c1", title: "Test", updated_at: "2026-01-01" }],
+    });
     expect(deps.conversationStore.list).toHaveBeenCalledWith("havnil");
   });
 
@@ -163,10 +166,19 @@ describe("handleHaWebSocket", () => {
     await vi.waitFor(() => expect(ws.sent).toHaveLength(1));
 
     expect(ws.sent[0]).toEqual({
-      type: "conversation_loaded",
-      id: "c1",
+      type: "conversation_history",
+      conversation_id: "c1",
       title: "Loaded",
-      messages: msgs,
+      messages: [
+        {
+          id: "2026-01-01T00:00:00Z",
+          role: "user",
+          content: "hi",
+          ts: "2026-01-01T00:00:00Z",
+          attachments: undefined,
+          tool_call: undefined,
+        },
+      ],
     });
   });
 
@@ -233,12 +245,11 @@ describe("handleHaWebSocket", () => {
       expect(vi.mocked(deps.conversationStore.rename)).toHaveBeenCalledTimes(1),
     );
 
-    // conversation_created + token + token + done + conversation_renamed = 5
     expect(ws.sent).toEqual([
       { type: "conversation_created", id: "conv-1", title: "New conversation" },
-      { type: "token", text: "Hello" },
-      { type: "token", text: " world" },
-      { type: "done", full_text: "Hello world" },
+      { type: "stream_token", stream_id: undefined, token: "Hello" },
+      { type: "stream_token", stream_id: undefined, token: " world" },
+      { type: "stream_done", stream_id: undefined, full_text: "Hello world" },
       { type: "conversation_renamed", id: "conv-1", title: "hi" },
     ]);
   });
@@ -287,9 +298,8 @@ describe("handleHaWebSocket", () => {
     );
 
     const types = ws.sent.map((m) => m.type);
-    expect(types).toContain("tool_use");
-    expect(types).toContain("tool_result");
-    expect(types).toContain("done");
+    expect(types).toContain("tool_call");
+    expect(types).toContain("stream_done");
   });
 
   it("sends error on dispatch failure", async () => {
@@ -303,10 +313,11 @@ describe("handleHaWebSocket", () => {
       deps,
     );
     ws.clientSend({ type: "message", text: "hi" });
-    // Wait for the error to appear — dispatch rejects, catch block sends error
+    // Wait for the error to appear — dispatch rejects, catch block sends stream_error
     await vi.waitFor(() => {
-      const errors = ws.sent.filter((m) => m.type === "error");
-      expect(errors).toContainEqual({ type: "error", message: "Error: AI broke" });
+      const errors = ws.sent.filter((m) => m.type === "stream_error");
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0]).toMatchObject({ type: "stream_error", error: "Error: AI broke" });
     });
   });
 
@@ -337,7 +348,9 @@ describe("handleHaWebSocket", () => {
       id: "conv-1",
       title: "New conversation",
     });
-    expect(ws.sent).toContainEqual({ type: "done", full_text: "I see an image." });
+    expect(ws.sent).toContainEqual(
+      expect.objectContaining({ type: "stream_done", full_text: "I see an image." }),
+    );
 
     // Verify attachments passed to dispatch
     const dispatchCall = vi.mocked(deps.dispatchMessage).mock.calls[0]![0];

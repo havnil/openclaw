@@ -3,7 +3,7 @@ import { URL } from "node:url";
 import type { WebSocket } from "ws";
 import { verifyHandshake } from "./auth.js";
 import { ConversationStore } from "./conversations.js";
-import type { ClientMessage, ServerMessage, HaUserIdentity, StoredMessage } from "./protocol.js";
+import type { HaUserIdentity, StoredMessage } from "./protocol.js";
 
 export interface HaWsHandlerDeps {
   configSecret: string;
@@ -24,22 +24,19 @@ export interface HaWsHandlerDeps {
   }) => Promise<void>;
 }
 
-function send(ws: WebSocket, msg: ServerMessage): void {
+function send(ws: WebSocket, msg: Record<string, unknown>): void {
   if (ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify(msg));
   }
 }
 
 /**
- * Generate a short conversation title from the first user message and AI reply.
- * Extracts the topic, truncates to ~40 chars.
+ * Generate a short conversation title from the first user message.
+ * Truncates to ~40 chars at a word boundary.
  */
-function generateTitle(userText: string, _assistantText: string): string {
-  // Use the user's first message as the basis for the title.
-  // Strip excessive whitespace and truncate.
+function generateTitle(userText: string): string {
   const cleaned = userText.replace(/\s+/g, " ").trim();
   if (cleaned.length <= 40) return cleaned;
-  // Truncate at a word boundary
   const truncated = cleaned.slice(0, 40);
   const lastSpace = truncated.lastIndexOf(" ");
   return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + "...";
@@ -72,7 +69,6 @@ export function handleHaWebSocket(
   const user = authResult.user;
   let activeAbortController: AbortController | null = null;
   let activeConversationId: string | null = null;
-  /** Track which conversations have had their title auto-generated. */
   const autoTitledConversations = new Set<string>();
 
   // Keepalive ping every 30s
@@ -90,7 +86,7 @@ export function handleHaWebSocket(
   });
 
   ws.on("message", async (raw) => {
-    let msg: ClientMessage;
+    let msg: Record<string, unknown>;
     try {
       msg = JSON.parse(raw.toString());
     } catch {
@@ -98,10 +94,19 @@ export function handleHaWebSocket(
       return;
     }
 
-    switch (msg.type) {
+    const type = msg.type as string;
+
+    switch (type) {
       case "list_conversations": {
         const list = await deps.conversationStore.list(user.user_id);
-        send(ws, { type: "conversations", list });
+        send(ws, {
+          type: "conversations_list",
+          conversations: list.map((c) => ({
+            id: c.id,
+            title: c.title,
+            updated_at: c.updated_at,
+          })),
+        });
         break;
       }
 
@@ -112,37 +117,52 @@ export function handleHaWebSocket(
         break;
       }
 
+      case "get_history":
       case "load_conversation": {
-        const conv = await deps.conversationStore.load(msg.conversation_id, user.user_id);
+        const convId = (msg.conversation_id as string) ?? "";
+        const conv = await deps.conversationStore.load(convId, user.user_id);
         if (!conv) {
           send(ws, { type: "error", message: "Conversation not found" });
           break;
         }
         activeConversationId = conv.id;
         send(ws, {
-          type: "conversation_loaded",
-          id: conv.id,
+          type: "conversation_history",
+          conversation_id: conv.id,
           title: conv.title,
-          messages: conv.messages,
+          messages: conv.messages.map((m) => ({
+            id: m.timestamp,
+            role: m.role,
+            content: m.text,
+            ts: m.timestamp,
+            attachments: m.attachments,
+            tool_call: m.tool_calls?.[0]
+              ? { name: m.tool_calls[0].name, output: m.tool_calls[0].output }
+              : undefined,
+          })),
         });
         break;
       }
 
       case "delete_conversation": {
-        await deps.conversationStore.delete(msg.conversation_id, user.user_id);
-        if (activeConversationId === msg.conversation_id) {
+        const convId = msg.conversation_id as string;
+        await deps.conversationStore.delete(convId, user.user_id);
+        if (activeConversationId === convId) {
           activeConversationId = null;
         }
-        send(ws, { type: "conversation_deleted", id: msg.conversation_id });
+        send(ws, { type: "conversation_deleted", id: convId });
         break;
       }
 
       case "rename_conversation": {
-        await deps.conversationStore.rename(msg.conversation_id, user.user_id, msg.title);
-        send(ws, { type: "conversation_renamed", id: msg.conversation_id, title: msg.title });
+        const convId = msg.conversation_id as string;
+        const title = msg.title as string;
+        await deps.conversationStore.rename(convId, user.user_id, title);
+        send(ws, { type: "conversation_renamed", id: convId, title });
         break;
       }
 
+      case "stop_stream":
       case "stop_generating": {
         activeAbortController?.abort();
         activeAbortController = null;
@@ -150,19 +170,24 @@ export function handleHaWebSocket(
       }
 
       case "message": {
+        // Panel sends "content", protocol spec uses "text"
+        const text = (msg.content as string) ?? (msg.text as string) ?? "";
+        const streamId = msg.stream_id as string | undefined;
+        const clientConvId = msg.conversation_id as string | undefined;
+
         // Auto-create conversation if none active
-        if (!activeConversationId) {
+        if (!activeConversationId && !clientConvId) {
           const conv = await deps.conversationStore.create(user.user_id);
           activeConversationId = conv.id;
           send(ws, { type: "conversation_created", id: conv.id, title: conv.title });
         }
 
-        const convId = msg.conversation_id ?? activeConversationId;
+        const convId = clientConvId ?? activeConversationId!;
 
         // Save user message
         const userMsg: StoredMessage = {
           role: "user",
-          text: msg.text,
+          text,
           timestamp: new Date().toISOString(),
         };
         await deps.conversationStore.appendMessage(convId, user.user_id, userMsg);
@@ -177,25 +202,36 @@ export function handleHaWebSocket(
         try {
           await deps.dispatchMessage({
             user,
-            text: msg.text,
+            text,
             conversationId: convId,
-            onToken: (text) => {
-              fullText += text;
-              send(ws, { type: "token", text });
+            onToken: (token) => {
+              fullText += token;
+              send(ws, { type: "stream_token", stream_id: streamId, token });
             },
             onToolUse: (name, input) => {
-              send(ws, { type: "tool_use", name, input });
+              send(ws, {
+                type: "tool_call",
+                conversation_id: convId,
+                tool_name: name,
+                input,
+              });
             },
             onToolResult: (name, output, isError) => {
               toolCalls.push({ name, input: {}, output });
-              send(ws, { type: "tool_result", name, output, is_error: isError || undefined });
+              send(ws, {
+                type: "tool_call",
+                conversation_id: convId,
+                tool_name: name,
+                output,
+                is_error: isError || undefined,
+              });
             },
-            onDone: (text) => {
-              fullText = text;
-              send(ws, { type: "done", full_text: text });
+            onDone: (doneText) => {
+              fullText = doneText;
+              send(ws, { type: "stream_done", stream_id: streamId, full_text: doneText });
             },
             onError: (message) => {
-              send(ws, { type: "error", message });
+              send(ws, { type: "stream_error", stream_id: streamId, error: message });
             },
             signal: abortController.signal,
           });
@@ -212,13 +248,13 @@ export function handleHaWebSocket(
           // Auto-generate title from the first exchange
           if (!autoTitledConversations.has(convId)) {
             autoTitledConversations.add(convId);
-            const title = generateTitle(msg.text, fullText);
+            const title = generateTitle(text);
             await deps.conversationStore.rename(convId, user.user_id, title);
             send(ws, { type: "conversation_renamed", id: convId, title });
           }
         } catch (err) {
           if (!abortController.signal.aborted) {
-            send(ws, { type: "error", message: String(err) });
+            send(ws, { type: "stream_error", stream_id: streamId, error: String(err) });
           }
         } finally {
           activeAbortController = null;
@@ -234,14 +270,18 @@ export function handleHaWebSocket(
         }
 
         const convId = activeConversationId;
+        const streamId = msg.stream_id as string | undefined;
+        const fileName = msg.file_name as string;
+        const mimeType = msg.mime_type as string;
+        const data = msg.data as string;
         const abortController = new AbortController();
         activeAbortController = abortController;
 
         const userMsg: StoredMessage = {
           role: "user",
-          text: `[Uploaded: ${msg.file_name}]`,
+          text: `[Uploaded: ${fileName}]`,
           timestamp: new Date().toISOString(),
-          attachments: [{ file_name: msg.file_name, mime_type: msg.mime_type }],
+          attachments: [{ file_name: fileName, mime_type: mimeType }],
         };
         await deps.conversationStore.appendMessage(convId, user.user_id, userMsg);
 
@@ -249,21 +289,29 @@ export function handleHaWebSocket(
         try {
           await deps.dispatchMessage({
             user,
-            text: `[User uploaded file: ${msg.file_name}]`,
+            text: `[User uploaded file: ${fileName}]`,
             conversationId: convId,
-            attachments: [{ file_name: msg.file_name, mime_type: msg.mime_type, data: msg.data }],
-            onToken: (text) => {
-              fullText += text;
-              send(ws, { type: "token", text });
+            attachments: [{ file_name: fileName, mime_type: mimeType, data }],
+            onToken: (token) => {
+              fullText += token;
+              send(ws, { type: "stream_token", stream_id: streamId, token });
             },
-            onToolUse: (name, input) => send(ws, { type: "tool_use", name, input }),
+            onToolUse: (name, input) =>
+              send(ws, { type: "tool_call", conversation_id: convId, tool_name: name, input }),
             onToolResult: (name, output, isError) =>
-              send(ws, { type: "tool_result", name, output, is_error: isError || undefined }),
-            onDone: (text) => {
-              fullText = text;
-              send(ws, { type: "done", full_text: text });
+              send(ws, {
+                type: "tool_call",
+                conversation_id: convId,
+                tool_name: name,
+                output,
+                is_error: isError || undefined,
+              }),
+            onDone: (doneText) => {
+              fullText = doneText;
+              send(ws, { type: "stream_done", stream_id: streamId, full_text: doneText });
             },
-            onError: (message) => send(ws, { type: "error", message }),
+            onError: (message) =>
+              send(ws, { type: "stream_error", stream_id: streamId, error: message }),
             signal: abortController.signal,
           });
 
@@ -275,7 +323,7 @@ export function handleHaWebSocket(
           await deps.conversationStore.appendMessage(convId, user.user_id, assistantMsg);
         } catch (err) {
           if (!abortController.signal.aborted) {
-            send(ws, { type: "error", message: String(err) });
+            send(ws, { type: "stream_error", stream_id: streamId, error: String(err) });
           }
         } finally {
           activeAbortController = null;
