@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { ConversationStore } from "./conversations.js";
 
 describe("ConversationStore", () => {
@@ -38,13 +38,17 @@ describe("ConversationStore", () => {
   });
 
   it("lists conversations sorted by updated_at descending", async () => {
+    vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00Z") });
     const c1 = await store.create("havnil");
+    vi.advanceTimersByTime(1000);
     const c2 = await store.create("havnil");
+    vi.advanceTimersByTime(1000);
     await store.appendMessage(c2.id, "havnil", {
       role: "user",
       text: "hello",
       timestamp: new Date().toISOString(),
     });
+    vi.useRealTimers();
 
     const list = await store.list("havnil");
     expect(list[0].id).toBe(c2.id);

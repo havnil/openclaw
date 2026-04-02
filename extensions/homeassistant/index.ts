@@ -1,7 +1,13 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Type } from "@sinclair/typebox";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createReplyDispatcher,
+  dispatchInboundMessage,
+  finalizeInboundContext,
+} from "openclaw/plugin-sdk/reply-runtime";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "ws";
 import { ConversationStore } from "./src/conversations.js";
@@ -177,11 +183,62 @@ export default definePluginEntry({
           configSecret: secret,
           admins,
           conversationStore,
-          // Placeholder dispatchMessage — echoes back until Task 11 wires the real AI pipeline
-          async dispatchMessage({ text, onToken, onDone }) {
-            const echo = `[placeholder] You said: ${text}`;
-            onToken(echo);
-            onDone(echo);
+          async dispatchMessage({ user, text, onToken, onToolUse, onDone, onError }) {
+            const fullCfg = api.config;
+            const agentId = "main";
+
+            const ctxPayload = finalizeInboundContext({
+              Body: text,
+              BodyForAgent: text,
+              BodyForCommands: text,
+              RawBody: text,
+              From: `ha:${user.user_id}`,
+              To: `ha:${user.user_id}`,
+              SessionKey: `ha:${user.user_id}`,
+              SenderName: user.user_name,
+              SenderId: user.user_id,
+              Provider: "homeassistant" as const,
+              Surface: "homeassistant" as const,
+              OriginatingChannel: "homeassistant" as const,
+              OriginatingTo: `ha:${user.user_id}`,
+              CommandAuthorized: user.is_admin,
+            });
+
+            const replyPipeline = createChannelReplyPipeline({
+              cfg: fullCfg,
+              agentId,
+              channel: "homeassistant",
+            });
+
+            const dispatcher = createReplyDispatcher({
+              ...replyPipeline,
+              deliver: async (payload) => {
+                if (payload.text) {
+                  onDone(payload.text);
+                }
+              },
+              onError: (err) => {
+                onError(String(err));
+              },
+            });
+
+            await dispatchInboundMessage({
+              ctx: ctxPayload,
+              cfg: fullCfg,
+              dispatcher,
+              replyOptions: {
+                onPartialReply: async (payload) => {
+                  if (payload.text) {
+                    onToken(payload.text);
+                  }
+                },
+                onToolStart: async (payload) => {
+                  if (payload.name) {
+                    onToolUse(payload.name, {});
+                  }
+                },
+              },
+            });
           },
         });
       });
