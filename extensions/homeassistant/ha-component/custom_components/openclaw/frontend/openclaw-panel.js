@@ -135,6 +135,7 @@ const STYLES = `
     color: var(--primary-text-color, #212121);
     background: var(--lovelace-background, var(--ha-background, #fafafa));
     box-sizing: border-box;
+    /* Ensure panel fills HA's custom panel host */
     position: absolute;
     inset: 0;
   }
