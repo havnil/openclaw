@@ -8,7 +8,6 @@ import {
   dispatchInboundMessage,
   finalizeInboundContext,
 } from "openclaw/plugin-sdk/reply-runtime";
-import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "ws";
 import { ConversationStore } from "./src/conversations.js";
 import { handleHaWebSocket } from "./src/ws-handler.js";
@@ -243,10 +242,9 @@ export default definePluginEntry({
         });
       });
 
-      registerPluginHttpRoute({
+      api.registerHttpRoute({
         path: "/homeassistant/ws",
-        auth: "gateway",
-        pluginId: "homeassistant",
+        auth: "plugin",
         handler(req, res) {
           // Handle WebSocket upgrade within the regular HTTP request pipeline.
           // Node delivers upgrade requests here when no dedicated "upgrade" listener
@@ -268,7 +266,6 @@ export default definePluginEntry({
           });
           return true;
         },
-        log: (msg) => api.logger.info(msg),
       });
 
       api.logger.info(
