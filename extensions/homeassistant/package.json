@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/homeassistant-plugin",
+  "version": "2026.3.30",
+  "private": true,
+  "description": "OpenClaw Home Assistant plugin — REST API tools for HA",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
