@@ -1,16 +1,14 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { Type } from "@sinclair/typebox";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import {
   createReplyDispatcher,
   dispatchInboundMessage,
   finalizeInboundContext,
 } from "openclaw/plugin-sdk/reply-runtime";
-import { WebSocketServer } from "ws";
-import { ConversationStore } from "./src/conversations.js";
-import { handleHaWebSocket } from "./src/ws-handler.js";
+import { homeAssistantPlugin, setHaDispatch } from "./src/channel.js";
+
+export { homeAssistantPlugin } from "./src/channel.js";
 
 interface HaConfig {
   url?: string;
@@ -43,14 +41,74 @@ function haClient(config: HaConfig) {
   return { request };
 }
 
-export default definePluginEntry({
+export default defineChannelPluginEntry({
   id: "homeassistant",
   name: "Home Assistant",
   description:
     "Home Assistant channel and tools — chat interface with WebSocket streaming and REST API control",
-  register(api) {
+  plugin: homeAssistantPlugin,
+
+  registerFull(api) {
     const cfg = api.pluginConfig as unknown as HaConfig;
     const ha = haClient(cfg);
+
+    // ── Wire the AI dispatch for the WebSocket channel ─────────────────────
+    setHaDispatch(async ({ cfg: fullCfg, user, text, onToken, onToolUse, onDone, onError }) => {
+      const agentId = "main";
+
+      const ctxPayload = finalizeInboundContext({
+        Body: text,
+        BodyForAgent: text,
+        BodyForCommands: text,
+        RawBody: text,
+        From: `ha:${user.user_id}`,
+        To: `ha:${user.user_id}`,
+        SessionKey: `ha:${user.user_id}`,
+        SenderName: user.user_name,
+        SenderId: user.user_id,
+        Provider: "homeassistant" as const,
+        Surface: "homeassistant" as const,
+        OriginatingChannel: "homeassistant" as const,
+        OriginatingTo: `ha:${user.user_id}`,
+        CommandAuthorized: user.is_admin,
+      });
+
+      const replyPipeline = createChannelReplyPipeline({
+        cfg: fullCfg,
+        agentId,
+        channel: "homeassistant",
+      });
+
+      const dispatcher = createReplyDispatcher({
+        ...replyPipeline,
+        deliver: async (payload) => {
+          if (payload.text) {
+            onDone(payload.text);
+          }
+        },
+        onError: (err) => {
+          onError(String(err));
+        },
+      });
+
+      await dispatchInboundMessage({
+        ctx: ctxPayload,
+        cfg: fullCfg,
+        dispatcher,
+        replyOptions: {
+          onPartialReply: async (payload) => {
+            if (payload.text) {
+              onToken(payload.text);
+            }
+          },
+          onToolStart: async (payload) => {
+            if (payload.name) {
+              onToolUse(payload.name, {});
+            }
+          },
+        },
+      });
+    });
 
     // ── ha_get_states ─────────────────────────────────────────────────────────
     api.registerTool({
@@ -165,91 +223,5 @@ export default definePluginEntry({
       },
       { optional: true },
     );
-
-    // ── WebSocket channel (only when secret is configured) ────────────────────
-    if (cfg.secret) {
-      const secret = cfg.secret;
-      const admins = cfg.admins ?? [];
-
-      // Conversation storage under ~/.openclaw/homeassistant/conversations
-      const storeDir = join(homedir(), ".openclaw", "homeassistant", "conversations");
-      const conversationStore = new ConversationStore(storeDir);
-
-      // Standalone WebSocket server on a dedicated port (gateway intercepts
-      // upgrade events on its own HTTP server, so we need our own listener).
-      const wsPort = cfg.ws_port ?? 18790;
-      const wss = new WebSocketServer({ port: wsPort, host: "0.0.0.0" });
-
-      wss.on("connection", (ws, req) => {
-        handleHaWebSocket(ws, req, {
-          configSecret: secret,
-          admins,
-          conversationStore,
-          async dispatchMessage({ user, text, onToken, onToolUse, onDone, onError }) {
-            const fullCfg = api.config;
-            const agentId = "main";
-
-            const ctxPayload = finalizeInboundContext({
-              Body: text,
-              BodyForAgent: text,
-              BodyForCommands: text,
-              RawBody: text,
-              From: `ha:${user.user_id}`,
-              To: `ha:${user.user_id}`,
-              SessionKey: `ha:${user.user_id}`,
-              SenderName: user.user_name,
-              SenderId: user.user_id,
-              Provider: "homeassistant" as const,
-              Surface: "homeassistant" as const,
-              OriginatingChannel: "homeassistant" as const,
-              OriginatingTo: `ha:${user.user_id}`,
-              CommandAuthorized: user.is_admin,
-            });
-
-            const replyPipeline = createChannelReplyPipeline({
-              cfg: fullCfg,
-              agentId,
-              channel: "homeassistant",
-            });
-
-            const dispatcher = createReplyDispatcher({
-              ...replyPipeline,
-              deliver: async (payload) => {
-                if (payload.text) {
-                  onDone(payload.text);
-                }
-              },
-              onError: (err) => {
-                onError(String(err));
-              },
-            });
-
-            await dispatchInboundMessage({
-              ctx: ctxPayload,
-              cfg: fullCfg,
-              dispatcher,
-              replyOptions: {
-                onPartialReply: async (payload) => {
-                  if (payload.text) {
-                    onToken(payload.text);
-                  }
-                },
-                onToolStart: async (payload) => {
-                  if (payload.name) {
-                    onToolUse(payload.name, {});
-                  }
-                },
-              },
-            });
-          },
-        });
-      });
-
-      api.logger.info(
-        `Home Assistant plugin registered (4 tools + WebSocket channel on port ${wsPort})`,
-      );
-    } else {
-      api.logger.info("Home Assistant plugin registered (4 tools)");
-    }
   },
 });

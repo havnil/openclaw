@@ -1,5 +1,6 @@
 {
   "id": "homeassistant",
+  "channels": ["homeassistant"],
   "name": "Home Assistant",
   "description": "Home Assistant channel and tools — chat interface with WebSocket streaming and REST API control",
   "enabledByDefault": false,
@@ -26,6 +27,11 @@
         "items": { "type": "string" },
         "description": "List of HA user IDs with full admin access",
         "default": []
+      },
+      "ws_port": {
+        "type": "number",
+        "description": "Port for the WebSocket channel server (default 18790)",
+        "default": 18790
       }
     }
   }

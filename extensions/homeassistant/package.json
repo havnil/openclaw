@@ -2,11 +2,19 @@
   "name": "@openclaw/homeassistant-plugin",
   "version": "2026.3.30",
   "private": true,
-  "description": "OpenClaw Home Assistant plugin — REST API tools for HA",
+  "description": "OpenClaw Home Assistant channel and tools — chat panel with WebSocket streaming and REST API control",
   "type": "module",
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "channel": {
+      "id": "homeassistant",
+      "label": "Home Assistant",
+      "selectionLabel": "Home Assistant (WebSocket)",
+      "docsPath": "/channels/homeassistant",
+      "blurb": "ChatGPT-style chat panel in the Home Assistant sidebar",
+      "order": 85
+    }
   }
 }
