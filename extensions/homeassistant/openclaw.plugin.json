@@ -1,0 +1,32 @@
+{
+  "id": "homeassistant",
+  "name": "Home Assistant",
+  "description": "Home Assistant channel and tools — chat interface with WebSocket streaming and REST API control",
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["token"],
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "Base URL of your Home Assistant instance",
+        "default": "http://localhost:8123"
+      },
+      "token": {
+        "type": "string",
+        "description": "Long-lived access token from your HA profile"
+      },
+      "secret": {
+        "type": "string",
+        "description": "Shared secret for WebSocket authentication"
+      },
+      "admins": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "List of HA user IDs with full admin access",
+        "default": []
+      }
+    }
+  }
+}
