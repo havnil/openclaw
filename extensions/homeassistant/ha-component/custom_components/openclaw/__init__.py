@@ -1,6 +1,7 @@
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.components.frontend import async_register_built_in_panel, async_remove_panel
+from homeassistant.components.frontend import async_remove_panel
+from homeassistant.components.panel_custom import async_register_panel
 from homeassistant.components.http import StaticPathConfig
 from .const import DOMAIN, CONF_WS_URL, CONF_SECRET
 import os
@@ -17,18 +18,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "secret": secret,
     }
 
-    # Register the frontend panel
+    # Serve the panel JS as a static asset
     panel_path = os.path.join(os.path.dirname(__file__), "frontend")
     await hass.http.async_register_static_paths(
         [StaticPathConfig("/openclaw/frontend", panel_path, cache_headers=False)]
     )
 
-    async_register_built_in_panel(
+    # Register the custom panel in the sidebar
+    await async_register_panel(
         hass,
-        "custom",
+        frontend_url_path="openclaw",
+        webcomponent_name="openclaw-panel",
         sidebar_title="OpenClaw",
         sidebar_icon="mdi:chat",
-        frontend_url_path="openclaw",
+        module_url="/openclaw/frontend/openclaw-panel.js",
         config={"ws_url": ws_url, "secret": secret},
         require_admin=False,
     )
