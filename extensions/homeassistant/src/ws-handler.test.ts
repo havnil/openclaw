@@ -228,17 +228,18 @@ describe("handleHaWebSocket", () => {
       deps,
     );
     ws.clientSend({ type: "message", text: "hi" });
-    // Wait for the full async handler to finish (appendMessage called twice = user + assistant)
+    // Wait for auto-title rename (happens after appendMessage + rename)
     await vi.waitFor(() =>
-      expect(vi.mocked(deps.conversationStore.appendMessage)).toHaveBeenCalledTimes(2),
+      expect(vi.mocked(deps.conversationStore.rename)).toHaveBeenCalledTimes(1),
     );
 
-    // conversation_created + token + token + done = 4
+    // conversation_created + token + token + done + conversation_renamed = 5
     expect(ws.sent).toEqual([
       { type: "conversation_created", id: "conv-1", title: "New conversation" },
       { type: "token", text: "Hello" },
       { type: "token", text: " world" },
       { type: "done", full_text: "Hello world" },
+      { type: "conversation_renamed", id: "conv-1", title: "hi" },
     ]);
   });
 

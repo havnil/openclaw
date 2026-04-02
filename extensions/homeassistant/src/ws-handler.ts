@@ -30,6 +30,21 @@ function send(ws: WebSocket, msg: ServerMessage): void {
   }
 }
 
+/**
+ * Generate a short conversation title from the first user message and AI reply.
+ * Extracts the topic, truncates to ~40 chars.
+ */
+function generateTitle(userText: string, _assistantText: string): string {
+  // Use the user's first message as the basis for the title.
+  // Strip excessive whitespace and truncate.
+  const cleaned = userText.replace(/\s+/g, " ").trim();
+  if (cleaned.length <= 40) return cleaned;
+  // Truncate at a word boundary
+  const truncated = cleaned.slice(0, 40);
+  const lastSpace = truncated.lastIndexOf(" ");
+  return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + "...";
+}
+
 export function handleHaWebSocket(
   ws: WebSocket,
   req: IncomingMessage,
@@ -57,6 +72,8 @@ export function handleHaWebSocket(
   const user = authResult.user;
   let activeAbortController: AbortController | null = null;
   let activeConversationId: string | null = null;
+  /** Track which conversations have had their title auto-generated. */
+  const autoTitledConversations = new Set<string>();
 
   // Keepalive ping every 30s
   const pingInterval = setInterval(() => {
@@ -191,6 +208,14 @@ export function handleHaWebSocket(
             tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
           };
           await deps.conversationStore.appendMessage(convId, user.user_id, assistantMsg);
+
+          // Auto-generate title from the first exchange
+          if (!autoTitledConversations.has(convId)) {
+            autoTitledConversations.add(convId);
+            const title = generateTitle(msg.text, fullText);
+            await deps.conversationStore.rename(convId, user.user_id, title);
+            send(ws, { type: "conversation_renamed", id: convId, title });
+          }
         } catch (err) {
           if (!abortController.signal.aborted) {
             send(ws, { type: "error", message: String(err) });

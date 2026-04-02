@@ -128,13 +128,16 @@ const STYLES = `
   :host {
     display: flex;
     flex-direction: column;
-    height: 100%;
+    height: 100vh;
     width: 100%;
     overflow: hidden;
     font-family: var(--ha-font-body, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
     color: var(--primary-text-color, #212121);
     background: var(--lovelace-background, var(--ha-background, #fafafa));
     box-sizing: border-box;
+    /* Ensure panel fills HA's custom panel host */
+    position: absolute;
+    inset: 0;
   }
 
   *, *::before, *::after { box-sizing: inherit; }
