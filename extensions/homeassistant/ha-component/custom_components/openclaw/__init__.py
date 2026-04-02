@@ -1,5 +1,7 @@
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.components.frontend import async_register_built_in_panel, async_remove_panel
+from homeassistant.components.http import StaticPathConfig
 from .const import DOMAIN, CONF_WS_URL, CONF_SECRET
 import os
 
@@ -17,11 +19,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Register the frontend panel
     panel_path = os.path.join(os.path.dirname(__file__), "frontend")
-    hass.http.register_static_path(
-        "/openclaw/frontend", panel_path, cache_headers=False
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig("/openclaw/frontend", panel_path, cache_headers=False)]
     )
 
-    hass.components.frontend.async_register_built_in_panel(
+    async_register_built_in_panel(
+        hass,
         "custom",
         sidebar_title="OpenClaw",
         sidebar_icon="mdi:chat",
@@ -35,6 +38,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload OpenClaw config entry."""
-    hass.components.frontend.async_remove_panel("openclaw")
+    async_remove_panel(hass, "openclaw")
     hass.data[DOMAIN].pop(entry.entry_id, None)
     return True
