@@ -23,10 +23,8 @@
         "description": "Shared secret for WebSocket authentication"
       },
       "admins": {
-        "type": "array",
-        "items": { "type": "string" },
-        "description": "List of HA user IDs with full admin access",
-        "default": []
+        "type": "string",
+        "description": "Comma-separated list of HA user IDs with full admin access"
       },
       "ws_port": {
         "type": "number",

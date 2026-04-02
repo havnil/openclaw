@@ -55,7 +55,14 @@ function resolveAccount(cfg: OpenClawConfig, _accountId?: string | null): Resolv
     url: (config.url as string) ?? "http://localhost:8123",
     token: (config.token as string) ?? "",
     secret: (config.secret as string) ?? "",
-    admins: (config.admins as string[]) ?? [],
+    admins: Array.isArray(config.admins)
+      ? (config.admins as string[])
+      : typeof config.admins === "string"
+        ? (config.admins as string)
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [],
     wsPort: (config.ws_port as number) ?? DEFAULT_WS_PORT,
     tlsCert: (config.tls_cert as string) ?? undefined,
     tlsKey: (config.tls_key as string) ?? undefined,
@@ -186,10 +193,16 @@ export function createHomeAssistantPlugin(): HaChannelPlugin {
                 conversationStore,
                 async dispatchMessage(params) {
                   if (!dispatchFn) {
+                    log?.error?.("AI dispatch not available — dispatchFn is null");
                     params.onError("AI dispatch not available — gateway still starting");
                     return;
                   }
-                  await dispatchFn({ cfg, ...params });
+                  try {
+                    await dispatchFn({ cfg, ...params });
+                  } catch (err) {
+                    log?.error?.(`AI dispatch error: ${err}`);
+                    params.onError(String(err));
+                  }
                 },
               });
             });
