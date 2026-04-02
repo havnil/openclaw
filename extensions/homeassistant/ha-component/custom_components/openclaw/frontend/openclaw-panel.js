@@ -1832,7 +1832,8 @@ class OpenClawPanel extends HTMLElement {
       }
 
       case "conversation_created":
-      case "conversation_updated": {
+      case "conversation_updated":
+      case "conversation_renamed": {
         const { id, title, updated_at } = data;
         const existing = this._conversations.find((c) => c.id === id);
         if (existing) {
