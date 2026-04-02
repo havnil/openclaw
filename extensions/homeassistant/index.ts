@@ -17,6 +17,7 @@ interface HaConfig {
   token: string;
   secret?: string;
   admins?: string[];
+  ws_port?: number;
 }
 
 function haClient(config: HaConfig) {
@@ -174,8 +175,10 @@ export default definePluginEntry({
       const storeDir = join(homedir(), ".openclaw", "homeassistant", "conversations");
       const conversationStore = new ConversationStore(storeDir);
 
-      // Single noServer WSS instance — shared across all connections on this route
-      const wss = new WebSocketServer({ noServer: true });
+      // Standalone WebSocket server on a dedicated port (gateway intercepts
+      // upgrade events on its own HTTP server, so we need our own listener).
+      const wsPort = cfg.ws_port ?? 18790;
+      const wss = new WebSocketServer({ port: wsPort, host: "0.0.0.0" });
 
       wss.on("connection", (ws, req) => {
         handleHaWebSocket(ws, req, {
@@ -242,34 +245,8 @@ export default definePluginEntry({
         });
       });
 
-      api.registerHttpRoute({
-        path: "/homeassistant/ws",
-        auth: "plugin",
-        handler(req, res) {
-          // Handle WebSocket upgrade within the regular HTTP request pipeline.
-          // Node delivers upgrade requests here when no dedicated "upgrade" listener
-          // has claimed the socket first. We pull the raw socket off res and hand
-          // it to the noServer WSS instance.
-          const upgrade = req.headers["upgrade"];
-          if (!upgrade || upgrade.toLowerCase() !== "websocket") {
-            res.statusCode = 426;
-            res.setHeader("Content-Type", "text/plain; charset=utf-8");
-            res.end("Upgrade Required");
-            return true;
-          }
-
-          // Perform the WebSocket handshake via the noServer WSS instance.
-          // req.socket is the underlying Duplex stream; pass an empty head buffer
-          // since we are not in a dedicated "upgrade" event handler.
-          wss.handleUpgrade(req, req.socket, Buffer.alloc(0), (ws) => {
-            wss.emit("connection", ws, req);
-          });
-          return true;
-        },
-      });
-
       api.logger.info(
-        "Home Assistant plugin registered (4 tools + WebSocket channel at /homeassistant/ws)",
+        `Home Assistant plugin registered (4 tools + WebSocket channel on port ${wsPort})`,
       );
     } else {
       api.logger.info("Home Assistant plugin registered (4 tools)");
