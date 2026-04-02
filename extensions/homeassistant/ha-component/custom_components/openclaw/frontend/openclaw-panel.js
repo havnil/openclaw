@@ -118,6 +118,7 @@ const ICON = {
   chevron: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`,
   robot: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M12 2a2 2 0 0 1 2 2v5H10V4a2 2 0 0 1 2-2z"/><circle cx="8.5" cy="16" r="1.5"/><circle cx="15.5" cy="16" r="1.5"/><path d="M8 20h8"/></svg>`,
   close: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
+  home: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>`,
 };
 
 // ---------------------------------------------------------------------------
@@ -349,6 +350,23 @@ const STYLES = `
     flex-shrink: 0;
     font-weight: 500;
   }
+
+  .home-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    cursor: pointer;
+    color: var(--secondary-text-color, #757575);
+    flex-shrink: 0;
+    padding: 0;
+    margin-left: 4px;
+  }
+  .home-btn:hover { background: var(--secondary-background-color, #f0f0f0); color: var(--primary-text-color, #212121); }
   .conn-status.connected { background: #e8f5e9; color: #2e7d32; }
   .conn-status.connecting { background: #fff8e1; color: #f57f17; }
   .conn-status.disconnected { background: #ffebee; color: #c62828; }
@@ -839,6 +857,7 @@ class OpenClawPanel extends HTMLElement {
       attachBtn: shadow.querySelector(".attach-btn"),
       fileInput: shadow.querySelector(".file-input"),
       attachStaging: shadow.querySelector(".attach-staging"),
+      homeBtn: shadow.querySelector(".home-btn"),
     };
 
     this._bindEvents();
@@ -865,6 +884,7 @@ class OpenClawPanel extends HTMLElement {
           <button class="hamburger-btn" title="Menu">${ICON.hamburger}</button>
           <span class="topbar-title">OpenClaw</span>
           <span class="conn-status disconnected">Disconnected</span>
+          <button class="home-btn" title="Back to Home Assistant">${ICON.home}</button>
         </div>
 
         <div class="messages-container"></div>
@@ -894,6 +914,12 @@ class OpenClawPanel extends HTMLElement {
     // Sidebar toggle (mobile)
     d.hamburgerBtn.addEventListener("click", () => this._toggleSidebar());
     d.sidebarOverlay.addEventListener("click", () => this._closeSidebar());
+
+    // Home button — navigate back to HA dashboard
+    d.homeBtn.addEventListener("click", () => {
+      window.history.pushState(null, "", "/");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
 
     // New chat
     d.shadow.querySelector(".btn-new-chat").addEventListener("click", () => {
