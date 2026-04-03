@@ -126,12 +126,11 @@ const ICON = {
 // ---------------------------------------------------------------------------
 
 const STYLES = `
-  :host {
-    display: flex;
+  :host, openclaw-panel {
+    display: flex !important;
     flex-direction: column;
-    height: 100%;
-    height: -webkit-fill-available;
-    min-height: 300px;
+    height: 100vh;
+    max-height: 100vh;
     width: 100%;
     overflow: hidden;
     font-family: var(--ha-font-body, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
@@ -815,17 +814,24 @@ class OpenClawPanel extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     if (this._rendered) this._updateHassDependent();
+    else this._tryInit();
   }
 
   set panel(panel) {
     this._panel = panel;
+    this._tryInit();
   }
 
   connectedCallback() {
-    if (!this._rendered) {
-      this._buildDOM();
-      this._rendered = true;
-    }
+    this._connected = true;
+    this._tryInit();
+  }
+
+  _tryInit() {
+    // Wait for hass, panel, and DOM connection before initializing
+    if (this._rendered || !this._connected || !this._hass || !this._panel) return;
+    this._buildDOM();
+    this._rendered = true;
     this._connectWs();
     this._bindViewportHandler();
   }
@@ -849,6 +855,15 @@ class OpenClawPanel extends HTMLElement {
     // Use innerHTML instead of shadow DOM for iPhone WKWebView compatibility.
     // Shadow DOM click/touch events don't work reliably in HA companion app on iPhone.
     const root = this;
+    // Force dimensions via JS for iPhone where CSS 100vh can be wrong
+    root.style.height = window.innerHeight + "px";
+    root.style.width = "100%";
+    root.style.overflow = "hidden";
+    root.style.display = "flex";
+    root.style.flexDirection = "column";
+    window.addEventListener("resize", () => {
+      root.style.height = window.innerHeight + "px";
+    });
 
     const style = document.createElement("style");
     style.textContent = STYLES;
@@ -880,6 +895,28 @@ class OpenClawPanel extends HTMLElement {
 
     this._bindEvents();
     this._checkSpeechSupport();
+    // Debug: verify buttons are found and clickable
+    console.log(
+      "[openclaw] DOM ready, sendBtn:",
+      !!this._dom.sendBtn,
+      "homeBtn:",
+      !!this._dom.homeBtn,
+    );
+    // Fallback: direct onclick on send button
+    if (this._dom.sendBtn) {
+      this._dom.sendBtn.onclick = () => {
+        console.log("[openclaw] send clicked");
+        if (this._isStreaming) this._stopStreaming();
+        else this._sendMessage();
+      };
+    }
+    if (this._dom.homeBtn) {
+      this._dom.homeBtn.onclick = () => {
+        console.log("[openclaw] home clicked");
+        window.history.pushState(null, "", "/");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      };
+    }
     this._renderConvList();
     this._renderMessages();
   }
