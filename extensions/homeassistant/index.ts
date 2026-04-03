@@ -53,72 +53,62 @@ export default defineChannelPluginEntry({
     const ha = haClient(cfg);
 
     // ── Wire the AI dispatch for the WebSocket channel ─────────────────────
-    setHaDispatch(
-      async ({ cfg: fullCfg, user, text, history, onToken, onToolUse, onDone, onError }) => {
-        const agentId = "main";
+    setHaDispatch(async ({ cfg: fullCfg, user, text, onToken, onToolUse, onDone, onError }) => {
+      const agentId = "main";
 
-        // Build InboundHistory from conversation messages so the AI has context
-        const inboundHistory = (history ?? []).map((m) => ({
-          sender: m.role === "user" ? user.user_name || user.user_id : "assistant",
-          body: m.text,
-          timestamp: new Date(m.timestamp).getTime(),
-        }));
+      const ctxPayload = finalizeInboundContext({
+        Body: text,
+        BodyForAgent: text,
+        BodyForCommands: text,
+        RawBody: text,
+        From: `ha:${user.user_id}`,
+        To: `ha:${user.user_id}`,
+        SessionKey: `ha:${user.user_id}`,
+        SenderName: user.user_name,
+        SenderId: user.user_id,
+        Provider: "homeassistant" as const,
+        Surface: "homeassistant" as const,
+        OriginatingChannel: "homeassistant" as const,
+        OriginatingTo: `ha:${user.user_id}`,
+        CommandAuthorized: user.is_admin,
+      });
 
-        const ctxPayload = finalizeInboundContext({
-          Body: text,
-          BodyForAgent: text,
-          BodyForCommands: text,
-          RawBody: text,
-          From: `ha:${user.user_id}`,
-          To: `ha:${user.user_id}`,
-          SessionKey: `ha:${user.user_id}`,
-          SenderName: user.user_name,
-          SenderId: user.user_id,
-          Provider: "homeassistant" as const,
-          Surface: "homeassistant" as const,
-          OriginatingChannel: "homeassistant" as const,
-          OriginatingTo: `ha:${user.user_id}`,
-          CommandAuthorized: user.is_admin,
-          InboundHistory: inboundHistory.length > 0 ? inboundHistory : undefined,
-        });
+      const replyPipeline = createChannelReplyPipeline({
+        cfg: fullCfg,
+        agentId,
+        channel: "homeassistant",
+      });
 
-        const replyPipeline = createChannelReplyPipeline({
-          cfg: fullCfg,
-          agentId,
-          channel: "homeassistant",
-        });
+      const dispatcher = createReplyDispatcher({
+        ...replyPipeline,
+        deliver: async (payload) => {
+          if (payload.text) {
+            onDone(payload.text);
+          }
+        },
+        onError: (err) => {
+          onError(String(err));
+        },
+      });
 
-        const dispatcher = createReplyDispatcher({
-          ...replyPipeline,
-          deliver: async (payload) => {
+      await dispatchInboundMessage({
+        ctx: ctxPayload,
+        cfg: fullCfg,
+        dispatcher,
+        replyOptions: {
+          onPartialReply: async (payload) => {
             if (payload.text) {
-              onDone(payload.text);
+              onToken(payload.text);
             }
           },
-          onError: (err) => {
-            onError(String(err));
+          onToolStart: async (payload) => {
+            if (payload.name) {
+              onToolUse(payload.name, {});
+            }
           },
-        });
-
-        await dispatchInboundMessage({
-          ctx: ctxPayload,
-          cfg: fullCfg,
-          dispatcher,
-          replyOptions: {
-            onPartialReply: async (payload) => {
-              if (payload.text) {
-                onToken(payload.text);
-              }
-            },
-            onToolStart: async (payload) => {
-              if (payload.name) {
-                onToolUse(payload.name, {});
-              }
-            },
-          },
-        });
-      },
-    );
+        },
+      });
+    });
 
     // ── ha_get_states ─────────────────────────────────────────────────────────
     api.registerTool({

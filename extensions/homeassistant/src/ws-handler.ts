@@ -192,12 +192,6 @@ export function handleHaWebSocket(
         };
         await deps.conversationStore.appendMessage(convId, user.user_id, userMsg);
 
-        // Load conversation history for AI context
-        const convData = await deps.conversationStore.load(convId, user.user_id);
-        const history = (convData?.messages ?? [])
-          .slice(-20) // Last 20 messages for context
-          .map((m) => ({ role: m.role, text: m.text, timestamp: m.timestamp }));
-
         // Dispatch to AI
         const abortController = new AbortController();
         activeAbortController = abortController;
@@ -210,7 +204,6 @@ export function handleHaWebSocket(
             user,
             text,
             conversationId: convId,
-            history,
             onToken: (token) => {
               fullText += token;
               send(ws, { type: "stream_token", stream_id: streamId, token });
