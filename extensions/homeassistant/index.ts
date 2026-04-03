@@ -54,7 +54,7 @@ export default defineChannelPluginEntry({
 
     // ── Wire the AI dispatch for the WebSocket channel ─────────────────────
     setHaDispatch(async ({ cfg: fullCfg, user, text, onToken, onToolUse, onDone, onError }) => {
-      const agentId = "main";
+      const agentId = user.is_admin ? "main" : "home";
 
       const ctxPayload = finalizeInboundContext({
         Body: text,
