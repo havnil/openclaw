@@ -97,11 +97,16 @@ export default defineChannelPluginEntry({
         cfg: fullCfg,
         dispatcher,
         replyOptions: {
-          onPartialReply: async (payload) => {
-            if (payload.text) {
-              onToken(payload.text);
-            }
-          },
+          onPartialReply: (() => {
+            let lastSent = "";
+            return async (payload: { text?: string }) => {
+              if (payload.text && payload.text.length > lastSent.length) {
+                const delta = payload.text.slice(lastSent.length);
+                lastSent = payload.text;
+                onToken(delta);
+              }
+            };
+          })(),
         },
       });
     });
