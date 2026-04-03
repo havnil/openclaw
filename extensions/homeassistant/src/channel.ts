@@ -91,6 +91,7 @@ export type HaDispatchFn = (params: {
   user: import("./protocol.js").HaUserIdentity;
   text: string;
   conversationId: string;
+  history?: Array<{ role: string; text: string; timestamp: string }>;
   attachments?: Array<{ file_name: string; mime_type: string; data: string }>;
   onToken: (text: string) => void;
   onToolUse: (name: string, input: Record<string, unknown>) => void;
