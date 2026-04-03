@@ -81,8 +81,9 @@ export default defineChannelPluginEntry({
 
       const dispatcher = createReplyDispatcher({
         ...replyPipeline,
-        deliver: async (payload) => {
-          if (payload.text) {
+        deliver: async (payload, info) => {
+          // Only send block/final replies to the panel, not tool results
+          if (info.kind !== "tool" && payload.text) {
             onDone(payload.text);
           }
         },
