@@ -129,16 +129,15 @@ const STYLES = `
   :host {
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    height: 100%;
     width: 100%;
     overflow: hidden;
     font-family: var(--ha-font-body, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
     color: var(--primary-text-color, #212121);
     background: var(--lovelace-background, var(--ha-background, #fafafa));
     box-sizing: border-box;
-    /* Ensure panel fills HA's custom panel host */
-    position: absolute;
-    inset: 0;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
 
   *, *::before, *::after { box-sizing: inherit; }
@@ -600,6 +599,7 @@ const STYLES = `
   }
   .input-btn:hover { background: var(--secondary-background-color, rgba(0,0,0,0.06)); color: var(--primary-text-color, #212121); }
   .input-btn:active { background: var(--divider-color, #e0e0e0); }
+  .input-btn { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   .input-btn:disabled { opacity: 0.35; cursor: not-allowed; }
   .input-btn.mic-active {
     color: #f44336;
@@ -919,18 +919,27 @@ class OpenClawPanel extends HTMLElement {
   _bindEvents() {
     const d = this._dom;
 
+    // Helper: bind both click and touchend for iOS WebView compatibility
+    const onTap = (el, fn) => {
+      el.addEventListener("click", fn);
+      el.addEventListener("touchend", (e) => {
+        e.preventDefault();
+        fn(e);
+      });
+    };
+
     // Sidebar toggle (mobile)
-    d.hamburgerBtn.addEventListener("click", () => this._toggleSidebar());
-    d.sidebarOverlay.addEventListener("click", () => this._closeSidebar());
+    onTap(d.hamburgerBtn, () => this._toggleSidebar());
+    onTap(d.sidebarOverlay, () => this._closeSidebar());
 
     // Home button — navigate back to HA dashboard
-    d.homeBtn.addEventListener("click", () => {
+    onTap(d.homeBtn, () => {
       window.history.pushState(null, "", "/");
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
 
     // New chat
-    d.shadow.querySelector(".btn-new-chat").addEventListener("click", () => {
+    onTap(d.shadow.querySelector(".btn-new-chat"), () => {
       this._newConversation();
       this._closeSidebar();
     });
@@ -946,7 +955,7 @@ class OpenClawPanel extends HTMLElement {
     });
 
     // Send / stop
-    d.sendBtn.addEventListener("click", () => {
+    onTap(d.sendBtn, () => {
       if (this._isStreaming) {
         this._stopStreaming();
       } else {
@@ -955,10 +964,10 @@ class OpenClawPanel extends HTMLElement {
     });
 
     // Mic
-    d.micBtn.addEventListener("click", () => this._toggleMic());
+    onTap(d.micBtn, () => this._toggleMic());
 
     // File attach
-    d.attachBtn.addEventListener("click", () => d.fileInput.click());
+    onTap(d.attachBtn, () => d.fileInput.click());
     d.fileInput.addEventListener("change", (e) => this._handleFiles(e.target.files));
 
     // Message container scroll — detect user scroll-up
