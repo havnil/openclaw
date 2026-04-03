@@ -1809,15 +1809,36 @@ class OpenClawPanel extends HTMLElement {
 
   _getWsUrl() {
     const config = this._panel?.config || {};
-    let url = config.ws_url || "";
-    // Auto-upgrade ws:// to wss:// on HTTPS pages
-    if (url.startsWith("ws://") && window.location.protocol === "https:") {
-      url = "wss://" + url.slice(5);
+    const configUrl = config.ws_url || "";
+
+    // If configured URL has a different hostname than the current page,
+    // try using the current page's hostname with the gateway port instead.
+    // This handles the case where HA is accessed via http://jarvis:8123
+    // but the configured URL points to wss://jarvis.tail3369a1.ts.net.
+    try {
+      const pageHost = window.location.hostname;
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+
+      if (configUrl) {
+        const parsed = new URL(configUrl.replace(/^ws/, "http"));
+        const configHost = parsed.hostname;
+        // If accessing from a different host, use current host with gateway port
+        if (configHost !== pageHost && pageHost !== "localhost") {
+          return `${proto}//${pageHost}:${parsed.port || "18789"}`;
+        }
+      }
+
+      // Use configured URL with protocol matching
+      let url = configUrl;
+      if (url.startsWith("ws://") && window.location.protocol === "https:") {
+        url = "wss://" + url.slice(5);
+      }
+      if (url.startsWith("http://")) url = "ws://" + url.slice(7);
+      if (url.startsWith("https://")) url = "wss://" + url.slice(8);
+      return url;
+    } catch {
+      return configUrl;
     }
-    // Convert http(s):// to ws(s)://
-    if (url.startsWith("http://")) url = "ws://" + url.slice(7);
-    if (url.startsWith("https://")) url = "wss://" + url.slice(8);
-    return url;
   }
 
   _getSecret() {
