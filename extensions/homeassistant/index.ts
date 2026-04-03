@@ -53,7 +53,7 @@ export default defineChannelPluginEntry({
     const ha = haClient(cfg);
 
     // ── Wire the AI dispatch for the WebSocket channel ─────────────────────
-    setHaDispatch(async ({ cfg: fullCfg, user, text, onToken, onToolUse, onDone, onError }) => {
+    setHaDispatch(async ({ cfg: fullCfg, user, text, onToken, onDone, onError }) => {
       const agentId = user.is_admin ? "main" : "home";
 
       const ctxPayload = finalizeInboundContext({
@@ -100,11 +100,6 @@ export default defineChannelPluginEntry({
           onPartialReply: async (payload) => {
             if (payload.text) {
               onToken(payload.text);
-            }
-          },
-          onToolStart: async (payload) => {
-            if (payload.name) {
-              onToolUse(payload.name, {});
             }
           },
         },
