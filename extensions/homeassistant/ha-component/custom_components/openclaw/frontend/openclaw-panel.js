@@ -1643,10 +1643,8 @@ class OpenClawPanel extends HTMLElement {
   // ── Voice input (server-side transcription via OC media understanding) ───
 
   _checkSpeechSupport() {
-    // MediaRecorder is widely supported — always show mic button
-    if (!navigator.mediaDevices || !window.MediaRecorder) {
-      if (this._dom) this._dom.micBtn.style.display = "none";
-    }
+    // MediaRecorder requires secure context (HTTPS). Always show the button
+    // but warn on tap if unavailable.
   }
 
   _toggleMic() {
@@ -1658,7 +1656,10 @@ class OpenClawPanel extends HTMLElement {
   }
 
   async _startMic() {
-    if (!navigator.mediaDevices || !window.MediaRecorder) return;
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+      this._showSystemMsg("Voice input requires HTTPS. Access HA via Tailscale (https://).");
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       this._mediaStream = stream;
