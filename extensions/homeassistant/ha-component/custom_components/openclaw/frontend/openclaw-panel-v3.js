@@ -846,40 +846,36 @@ class OpenClawPanel extends HTMLElement {
   // ── DOM construction ────────────────────────────────────────────────────
 
   _buildDOM() {
-    // Prevent iOS from treating the panel as a selectable/long-press image
-    this.style.webkitUserSelect = "none";
-    this.style.userSelect = "none";
-    this.style.webkitTouchCallout = "none";
-    this.setAttribute("role", "application");
-
-    const shadow = this.attachShadow({ mode: "open" });
+    // Use innerHTML instead of shadow DOM for iPhone WKWebView compatibility.
+    // Shadow DOM click/touch events don't work reliably in HA companion app on iPhone.
+    const root = this;
 
     const style = document.createElement("style");
     style.textContent = STYLES;
-    shadow.appendChild(style);
+    root.appendChild(style);
 
     const layout = document.createElement("div");
     layout.className = "layout";
     layout.innerHTML = this._layoutHTML();
-    shadow.appendChild(layout);
+    root.appendChild(layout);
 
     this._dom = {
-      shadow,
+      shadow: root,
       layout,
-      sidebarOverlay: shadow.querySelector(".sidebar-overlay"),
-      sidebar: shadow.querySelector(".sidebar"),
-      convList: shadow.querySelector(".conv-list"),
-      hamburgerBtn: shadow.querySelector(".hamburger-btn"),
-      topbarTitle: shadow.querySelector(".topbar-title"),
-      connStatus: shadow.querySelector(".conn-status"),
-      messagesContainer: shadow.querySelector(".messages-container"),
-      inputTextarea: shadow.querySelector(".input-textarea"),
-      sendBtn: shadow.querySelector(".send-btn"),
-      micBtn: shadow.querySelector(".mic-btn"),
-      attachBtn: shadow.querySelector(".attach-btn"),
-      fileInput: shadow.querySelector(".file-input"),
-      attachStaging: shadow.querySelector(".attach-staging"),
-      homeBtn: shadow.querySelector(".home-btn"),
+      sidebarOverlay: root.querySelector(".sidebar-overlay"),
+      sidebar: root.querySelector(".sidebar"),
+      convList: root.querySelector(".conv-list"),
+      hamburgerBtn: root.querySelector(".hamburger-btn"),
+      topbarTitle: root.querySelector(".topbar-title"),
+      connStatus: root.querySelector(".conn-status"),
+      messagesContainer: root.querySelector(".messages-container"),
+      inputTextarea: root.querySelector(".input-textarea"),
+      sendBtn: root.querySelector(".send-btn"),
+      micBtn: root.querySelector(".mic-btn"),
+      attachBtn: root.querySelector(".attach-btn"),
+      fileInput: root.querySelector(".file-input"),
+      attachStaging: root.querySelector(".attach-staging"),
+      homeBtn: root.querySelector(".home-btn"),
     };
 
     this._bindEvents();
