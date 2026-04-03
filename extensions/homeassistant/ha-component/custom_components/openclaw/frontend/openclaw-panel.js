@@ -1889,7 +1889,7 @@ class OpenClawPanel extends HTMLElement {
     try {
       this._ws = new WebSocket(wsUrl);
     } catch (e) {
-      this._setConnStatus("disconnected");
+      this._setConnStatus("disconnected", "WebSocket create failed: " + wsUrl);
       this._scheduleReconnect();
       return;
     }
@@ -1912,7 +1912,7 @@ class OpenClawPanel extends HTMLElement {
         },
         reject: (err) => {
           console.error("Gateway handshake failed:", err);
-          this._setConnStatus("disconnected");
+          this._setConnStatus("disconnected", err?.message || "handshake failed");
           this._ws.close();
         },
       };
@@ -1939,16 +1939,17 @@ class OpenClawPanel extends HTMLElement {
       } catch (_) {}
     });
 
-    this._ws.addEventListener("close", () => {
+    this._ws.addEventListener("close", (e) => {
       this._wsReady = false;
-      this._setConnStatus("disconnected");
+      this._setConnStatus("disconnected", e.reason || "connection closed");
       this._stopPing();
       if (!this._destroyed) this._scheduleReconnect();
     });
 
     this._ws.addEventListener("error", () => {
       this._wsReady = false;
-      this._setConnStatus("disconnected");
+      const wsUrl = this._getWsUrl();
+      this._setConnStatus("disconnected", "cannot reach " + wsUrl);
     });
   }
 
@@ -2106,17 +2107,22 @@ class OpenClawPanel extends HTMLElement {
 
   // ── Connection status indicator ──────────────────────────────────────────
 
-  _setConnStatus(status) {
+  _setConnStatus(status, detail) {
     this._connStatus = status;
     if (!this._dom) return;
     const el = this._dom.connStatus;
     el.className = `conn-status ${status}`;
-    el.textContent =
+    const label =
       status === "connected"
         ? "Connected"
         : status === "connecting"
           ? "Connecting…"
           : "Disconnected";
+    el.textContent = detail ? `${label} (${detail})` : label;
+    // Show connection info in the chat area on failure
+    if (status === "disconnected" && detail) {
+      this._showSystemMsg("Connection: " + detail);
+    }
   }
 
   // ── HA dependency updates ────────────────────────────────────────────────
