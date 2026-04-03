@@ -233,6 +233,15 @@ describe("handleHaWebSocket", () => {
         onDone("Hello world");
       }),
     });
+    // After message is saved, load should return the conversation with default title
+    vi.mocked(deps.conversationStore.load).mockResolvedValue({
+      id: "conv-1",
+      user_id: "havnil",
+      title: "New conversation",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      messages: [],
+    });
 
     handleHaWebSocket(
       ws as unknown as import("ws").WebSocket,

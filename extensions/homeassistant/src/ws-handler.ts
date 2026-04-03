@@ -69,7 +69,6 @@ export function handleHaWebSocket(
   const user = authResult.user;
   let activeAbortController: AbortController | null = null;
   let activeConversationId: string | null = null;
-  const autoTitledConversations = new Set<string>();
 
   // Keepalive ping every 30s
   const pingInterval = setInterval(() => {
@@ -245,9 +244,9 @@ export function handleHaWebSocket(
           };
           await deps.conversationStore.appendMessage(convId, user.user_id, assistantMsg);
 
-          // Auto-generate title from the first exchange
-          if (!autoTitledConversations.has(convId)) {
-            autoTitledConversations.add(convId);
+          // Auto-generate title from the first exchange only
+          const conv = await deps.conversationStore.load(convId, user.user_id);
+          if (conv && conv.title === "New conversation") {
             const title = generateTitle(text);
             await deps.conversationStore.rename(convId, user.user_id, title);
             send(ws, { type: "conversation_renamed", id: convId, title });
