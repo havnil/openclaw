@@ -3,6 +3,7 @@
   "name": "OpenClaw",
   "version": "1.0.0",
   "documentation": "https://docs.openclaw.ai/channels/homeassistant",
+  "dependencies": ["panel_custom", "http", "frontend"],
   "requirements": [],
   "codeowners": [],
   "iot_class": "local_push",
