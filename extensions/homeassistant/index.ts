@@ -56,14 +56,17 @@ export default defineChannelPluginEntry({
     api.registerGatewayMethod(
       "homeassistant.conversations",
       handleConversations as Parameters<typeof api.registerGatewayMethod>[1],
+      { scope: "operator.write" },
     );
     api.registerGatewayMethod(
       "homeassistant.send",
       createSendHandler(() => api.config) as Parameters<typeof api.registerGatewayMethod>[1],
+      { scope: "operator.write" },
     );
     api.registerGatewayMethod(
       "homeassistant.transcribe",
       handleTranscribe as Parameters<typeof api.registerGatewayMethod>[1],
+      { scope: "operator.write" },
     );
 
     // ── Wire audio transcription via OC's media understanding pipeline ─────

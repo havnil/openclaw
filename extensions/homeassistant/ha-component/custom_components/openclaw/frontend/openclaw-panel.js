@@ -1878,11 +1878,37 @@ class OpenClawPanel extends HTMLElement {
         this._ws.close();
         return;
       }
-      this._wsReady = true;
-      this._reconnectDelay = 1000;
-      this._setConnStatus("connected");
-      this._startPing();
-      this._loadConversations();
+      // Gateway requires a connect handshake before any method calls
+      const connectId = uid();
+      this._pendingRequests[connectId] = {
+        resolve: (hello) => {
+          this._connId = hello?.connId;
+          this._wsReady = true;
+          this._reconnectDelay = 1000;
+          this._setConnStatus("connected");
+          this._startPing();
+          this._loadConversations();
+        },
+        reject: (err) => {
+          console.error("Gateway handshake failed:", err);
+          this._setConnStatus("disconnected");
+          this._ws.close();
+        },
+      };
+      this._ws.send(
+        JSON.stringify({
+          type: "req",
+          id: connectId,
+          method: "connect",
+          params: {
+            minProtocol: 3,
+            maxProtocol: 3,
+            client: { id: "openclaw-control-ui", version: "1.0", platform: "web", mode: "webchat" },
+            role: "operator",
+            scopes: ["operator.read", "operator.write"],
+          },
+        }),
+      );
     });
 
     this._ws.addEventListener("message", (e) => {
