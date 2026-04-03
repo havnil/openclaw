@@ -130,6 +130,8 @@ const STYLES = `
     display: flex;
     flex-direction: column;
     height: 100%;
+    height: -webkit-fill-available;
+    min-height: 300px;
     width: 100%;
     overflow: hidden;
     font-family: var(--ha-font-body, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
@@ -137,6 +139,9 @@ const STYLES = `
     background: var(--lovelace-background, var(--ha-background, #fafafa));
     box-sizing: border-box;
     -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
     touch-action: manipulation;
   }
 
@@ -418,6 +423,8 @@ const STYLES = `
     border-radius: 18px;
     font-size: 14px;
     line-height: 1.5;
+    -webkit-user-select: text;
+    user-select: text;
     word-break: break-word;
     overflow-wrap: anywhere;
   }
@@ -648,6 +655,7 @@ const STYLES = `
     transition: border-color 0.15s;
     display: block;
   }
+  .input-textarea { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
   .input-textarea:focus { border-color: var(--primary-color, #03a9f4); background: var(--card-background-color, #fff); }
   .input-textarea::placeholder { color: var(--secondary-text-color, #9e9e9e); }
   .input-textarea:disabled { opacity: 0.6; cursor: not-allowed; }
@@ -838,6 +846,12 @@ class OpenClawPanel extends HTMLElement {
   // ── DOM construction ────────────────────────────────────────────────────
 
   _buildDOM() {
+    // Prevent iOS from treating the panel as a selectable/long-press image
+    this.style.webkitUserSelect = "none";
+    this.style.userSelect = "none";
+    this.style.webkitTouchCallout = "none";
+    this.setAttribute("role", "application");
+
     const shadow = this.attachShadow({ mode: "open" });
 
     const style = document.createElement("style");
@@ -920,6 +934,8 @@ class OpenClawPanel extends HTMLElement {
     const d = this._dom;
 
     // Helper: tap handling for iOS WKWebView shadow DOM compatibility.
+    // WKWebView on iPhone may not fire 'click' on buttons inside shadow DOM.
+    // Use touchstart/touchend with move detection to avoid scroll conflicts.
     const onTap = (el, fn) => {
       let touchMoved = false;
       el.addEventListener(

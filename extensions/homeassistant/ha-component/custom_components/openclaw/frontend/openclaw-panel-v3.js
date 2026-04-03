@@ -139,6 +139,9 @@ const STYLES = `
     background: var(--lovelace-background, var(--ha-background, #fafafa));
     box-sizing: border-box;
     -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
     touch-action: manipulation;
   }
 
@@ -420,6 +423,8 @@ const STYLES = `
     border-radius: 18px;
     font-size: 14px;
     line-height: 1.5;
+    -webkit-user-select: text;
+    user-select: text;
     word-break: break-word;
     overflow-wrap: anywhere;
   }
@@ -650,6 +655,7 @@ const STYLES = `
     transition: border-color 0.15s;
     display: block;
   }
+  .input-textarea { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
   .input-textarea:focus { border-color: var(--primary-color, #03a9f4); background: var(--card-background-color, #fff); }
   .input-textarea::placeholder { color: var(--secondary-text-color, #9e9e9e); }
   .input-textarea:disabled { opacity: 0.6; cursor: not-allowed; }
@@ -840,6 +846,12 @@ class OpenClawPanel extends HTMLElement {
   // ── DOM construction ────────────────────────────────────────────────────
 
   _buildDOM() {
+    // Prevent iOS from treating the panel as a selectable/long-press image
+    this.style.webkitUserSelect = "none";
+    this.style.userSelect = "none";
+    this.style.webkitTouchCallout = "none";
+    this.setAttribute("role", "application");
+
     const shadow = this.attachShadow({ mode: "open" });
 
     const style = document.createElement("style");
