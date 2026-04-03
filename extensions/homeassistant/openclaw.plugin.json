@@ -25,11 +25,6 @@
       "admins": {
         "type": "string",
         "description": "Comma-separated list of HA user IDs with full admin access"
-      },
-      "ws_port": {
-        "type": "number",
-        "description": "Port for the WebSocket channel server (default 18790)",
-        "default": 18790
       }
     }
   }

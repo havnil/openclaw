@@ -1003,18 +1003,32 @@ class OpenClawPanel extends HTMLElement {
 
   // ── Conversation management ──────────────────────────────────────────────
 
-  _newConversation() {
-    const id = uid();
-    const conv = { id, title: "New Chat", updatedAt: new Date().toISOString() };
-    this._conversations.unshift(conv);
-    this._messages[id] = [];
-    this._setActiveConv(id);
-    this._renderConvList();
-    // Ask server to create it
-    this._wsSend({ type: "new_conversation", conversation_id: id });
+  async _newConversation() {
+    try {
+      const res = await this._gwRequest("homeassistant.conversations", {
+        action: "create",
+        user_id: this._getUserId(),
+      });
+      const conv = {
+        id: res.id,
+        title: res.title || "New Chat",
+        updatedAt: new Date().toISOString(),
+      };
+      this._conversations.unshift(conv);
+      this._messages[conv.id] = [];
+      this._setActiveConv(conv.id);
+      this._renderConvList();
+    } catch (err) {
+      // Fallback: create locally
+      const id = uid();
+      this._conversations.unshift({ id, title: "New Chat", updatedAt: new Date().toISOString() });
+      this._messages[id] = [];
+      this._setActiveConv(id);
+      this._renderConvList();
+    }
   }
 
-  _setActiveConv(id) {
+  async _setActiveConv(id) {
     this._activeConvId = id;
     this._streamingMsgId = null;
     this._isStreaming = false;
@@ -1024,9 +1038,24 @@ class OpenClawPanel extends HTMLElement {
     }
     this._renderMessages();
     this._renderConvList();
-    // Request history from server if we don't have messages yet
+    // Load history from server if we don't have messages yet
     if (!this._messages[id] || this._messages[id].length === 0) {
-      this._wsSend({ type: "get_history", conversation_id: id });
+      try {
+        const res = await this._gwRequest("homeassistant.conversations", {
+          action: "load",
+          user_id: this._getUserId(),
+          conversation_id: id,
+        });
+        if (res?.messages) {
+          this._messages[id] = res.messages.map((m) => ({
+            id: m.id || uid(),
+            role: m.role,
+            content: m.content || "",
+            ts: m.ts || new Date().toISOString(),
+          }));
+          if (this._activeConvId === id) this._renderMessages();
+        }
+      } catch (_) {}
     }
   }
 
@@ -1041,7 +1070,11 @@ class OpenClawPanel extends HTMLElement {
         this._renderMessages();
       }
     }
-    this._wsSend({ type: "delete_conversation", conversation_id: id });
+    this._gwRequest("homeassistant.conversations", {
+      action: "delete",
+      user_id: this._getUserId(),
+      conversation_id: id,
+    }).catch(() => {});
     this._renderConvList();
   }
 
@@ -1052,7 +1085,12 @@ class OpenClawPanel extends HTMLElement {
       if (this._activeConvId === id && this._dom) {
         this._dom.topbarTitle.textContent = conv.title;
       }
-      this._wsSend({ type: "rename_conversation", conversation_id: id, title: conv.title });
+      this._gwRequest("homeassistant.conversations", {
+        action: "rename",
+        user_id: this._getUserId(),
+        conversation_id: id,
+        title: conv.title,
+      }).catch(() => {});
       this._renderConvList();
     }
     this._renamingConvId = null;
@@ -1518,18 +1556,31 @@ class OpenClawPanel extends HTMLElement {
     this._pendingAttachments = [];
     this._renderAttachStaging();
 
-    // Send to server
-    const payload = {
-      type: "message",
+    // Send via gateway method
+    this._gwRequest("homeassistant.send", {
+      secret: this._getSecret(),
+      user_id: this._getUserId(),
+      user_name: this._getUserName(),
       conversation_id: this._activeConvId,
-      message_id: userMsg.id,
-      stream_id: streamId,
       content: text,
-    };
-    if (attachments.length > 0) {
-      payload.attachments = attachments;
-    }
-    this._wsSend(payload);
+      conn_id: this._connId,
+    })
+      .then((res) => {
+        // If a new conversation was created, update state
+        if (res?.new_conversation && res?.conversation_id) {
+          this._activeConvId = res.conversation_id;
+          this._conversations.unshift({
+            id: res.conversation_id,
+            title: "New conversation",
+            updatedAt: new Date().toISOString(),
+          });
+          this._renderConvList();
+        }
+      })
+      .catch((err) => {
+        this._showSystemMsg("Send failed: " + err.message);
+        this._finalizeStreamingMessage(streamId);
+      });
   }
 
   _stopStreaming() {
@@ -1717,15 +1768,17 @@ class OpenClawPanel extends HTMLElement {
       new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ""),
     );
 
-    // Send to server for transcription
-    const requestId = uid();
-    this._pendingTranscription = requestId;
-    this._wsSend({
-      type: "transcribe",
+    // Send to server for transcription via gateway method
+    this._gwRequest("homeassistant.transcribe", {
       audio: base64,
       mime: "audio/webm",
-      request_id: requestId,
-    });
+    })
+      .then((res) => {
+        this._handleTranscription(res || {});
+      })
+      .catch((err) => {
+        this._handleTranscription({ error: err.message });
+      });
   }
 
   _handleTranscription(data) {
@@ -1752,23 +1805,48 @@ class OpenClawPanel extends HTMLElement {
     }
   }
 
-  // ── WebSocket ────────────────────────────────────────────────────────────
+  // ── Gateway WebSocket (uses OC gateway protocol) ─────────────────────────
 
   _getWsUrl() {
     const config = this._panel?.config || {};
     let url = config.ws_url || "";
-    const secret = config.secret || "";
-    const userId = this._hass?.user?.id || "";
-    const userName = encodeURIComponent(this._hass?.user?.name || "");
-
-    // Auto-upgrade ws:// to wss:// when the page is served over HTTPS
-    // (browsers block mixed content: ws:// from https:// pages).
+    // Auto-upgrade ws:// to wss:// on HTTPS pages
     if (url.startsWith("ws://") && window.location.protocol === "https:") {
       url = "wss://" + url.slice(5);
     }
+    // Convert http(s):// to ws(s)://
+    if (url.startsWith("http://")) url = "ws://" + url.slice(7);
+    if (url.startsWith("https://")) url = "wss://" + url.slice(8);
+    return url;
+  }
 
-    const sep = url.includes("?") ? "&" : "?";
-    return `${url}${sep}secret=${encodeURIComponent(secret)}&user_id=${encodeURIComponent(userId)}&user_name=${userName}`;
+  _getSecret() {
+    return this._panel?.config?.secret || "";
+  }
+
+  _getUserId() {
+    return this._hass?.user?.id || "";
+  }
+
+  _getUserName() {
+    return this._hass?.user?.name || "";
+  }
+
+  /** Call a gateway method and return the response payload. */
+  async _gwRequest(method, params) {
+    return new Promise((resolve, reject) => {
+      const id = uid();
+      this._pendingRequests = this._pendingRequests || {};
+      this._pendingRequests[id] = { resolve, reject };
+      this._wsSend({ type: "req", id, method, params });
+      // Timeout after 30s
+      setTimeout(() => {
+        if (this._pendingRequests[id]) {
+          delete this._pendingRequests[id];
+          reject(new Error("Request timeout"));
+        }
+      }, 30000);
+    });
   }
 
   _connectWs() {
@@ -1780,12 +1858,13 @@ class OpenClawPanel extends HTMLElement {
       return;
     }
     const wsUrl = this._getWsUrl();
-    if (!wsUrl || wsUrl.startsWith("?")) {
+    if (!wsUrl) {
       this._setConnStatus("disconnected");
       return;
     }
 
     this._setConnStatus("connecting");
+    this._pendingRequests = {};
     try {
       this._ws = new WebSocket(wsUrl);
     } catch (e) {
@@ -1803,14 +1882,13 @@ class OpenClawPanel extends HTMLElement {
       this._reconnectDelay = 1000;
       this._setConnStatus("connected");
       this._startPing();
-      // Request conversation list
-      this._wsSend({ type: "list_conversations" });
+      this._loadConversations();
     });
 
     this._ws.addEventListener("message", (e) => {
       try {
-        const data = JSON.parse(e.data);
-        this._handleWsMessage(data);
+        const frame = JSON.parse(e.data);
+        this._handleGatewayFrame(frame);
       } catch (_) {}
     });
 
@@ -1827,137 +1905,103 @@ class OpenClawPanel extends HTMLElement {
     });
   }
 
-  _handleWsMessage(data) {
-    switch (data.type) {
-      case "pong":
-        if (this._pongTimeout) clearTimeout(this._pongTimeout);
-        break;
+  _handleGatewayFrame(frame) {
+    // Gateway response to a request
+    if (frame.type === "res" && frame.id && this._pendingRequests?.[frame.id]) {
+      const { resolve, reject } = this._pendingRequests[frame.id];
+      delete this._pendingRequests[frame.id];
+      if (frame.ok) {
+        resolve(frame.payload);
+      } else {
+        reject(new Error(frame.error?.message || "Request failed"));
+      }
+      return;
+    }
 
-      case "conversations_list":
-        this._conversations = (data.conversations || []).map((c) => ({
-          id: c.id,
-          title: c.title || "Chat",
-          updatedAt: c.updated_at || c.updatedAt || new Date().toISOString(),
-        }));
-        this._renderConvList();
-        if (!this._activeConvId && this._conversations.length > 0) {
-          this._setActiveConv(this._conversations[0].id);
-        }
-        break;
+    // Gateway event (streaming tokens, title updates, etc.)
+    if (frame.type === "event" && frame.event) {
+      this._handleGatewayEvent(frame.event, frame.payload || {});
+      return;
+    }
 
-      case "conversation_history":
-        if (data.conversation_id) {
-          this._messages[data.conversation_id] = (data.messages || []).map((m) => ({
-            id: m.id || uid(),
-            role: m.role,
-            content: m.content || "",
-            ts: m.ts || m.timestamp || new Date().toISOString(),
-            attachments: m.attachments,
-            toolCall: m.tool_call,
-          }));
-          if (data.conversation_id === this._activeConvId) {
-            this._renderMessages();
-          }
-        }
-        break;
+    // Gateway hello (connection established)
+    if (frame.type === "hello") {
+      this._connId = frame.connId;
+      return;
+    }
+  }
 
-      case "stream_token": {
-        const { stream_id, token } = data;
-        if (stream_id && stream_id === this._streamingMsgId) {
+  _handleGatewayEvent(event, payload) {
+    switch (event) {
+      case "homeassistant.token": {
+        const streamId = this._streamingMsgId;
+        if (streamId) {
           const msgs = this._messages[this._activeConvId];
-          const msg = msgs && msgs.find((m) => m.id === stream_id);
+          const msg = msgs && msgs.find((m) => m.id === streamId);
           if (msg) {
-            msg.content = (msg.content || "") + (token || "");
-            this._updateStreamingMessage(stream_id, msg.content);
+            msg.content = (msg.content || "") + (payload.token || "");
+            this._updateStreamingMessage(streamId, msg.content);
           }
         }
         break;
       }
 
-      case "stream_done":
-        if (data.stream_id && data.stream_id === this._streamingMsgId) {
-          this._finalizeStreamingMessage(data.stream_id);
-        }
-        break;
-
-      case "stream_error":
-        if (data.stream_id && data.stream_id === this._streamingMsgId) {
-          const msgs = this._messages[this._activeConvId];
-          const msg = msgs && msgs.find((m) => m.id === data.stream_id);
-          if (msg) {
-            msg.content = (msg.content || "") + "\n\n*(Error: " + (data.error || "unknown") + ")*";
-          }
-          this._finalizeStreamingMessage(data.stream_id);
-        }
-        break;
-
-      case "tool_call": {
-        const convMsgs = this._messages[data.conversation_id || this._activeConvId];
-        if (convMsgs) {
-          const toolMsg = {
-            id: data.id || uid(),
-            role: "assistant",
-            content: "",
-            ts: new Date().toISOString(),
-            toolCall: {
-              name: data.tool_name,
-              input: data.input,
-              output: data.output,
-            },
-          };
-          const convId = data.conversation_id || this._activeConvId;
-          if (!this._messages[convId]) this._messages[convId] = [];
-          this._messages[convId].push(toolMsg);
-          if (convId === this._activeConvId) {
-            const el = this._dom.messagesContainer;
-            const empty = el.querySelector(".empty-state");
-            if (empty) el.removeChild(empty);
-            el.appendChild(this._buildMsgEl(toolMsg));
-            if (!this._userScrolledUp) {
-              requestAnimationFrame(() => {
-                el.scrollTop = el.scrollHeight;
-              });
-            }
-          }
+      case "homeassistant.done": {
+        if (this._streamingMsgId) {
+          this._finalizeStreamingMessage(this._streamingMsgId);
         }
         break;
       }
 
-      case "conversation_created":
-      case "conversation_updated":
-      case "conversation_renamed": {
-        const { id, title, updated_at } = data;
-        const existing = this._conversations.find((c) => c.id === id);
-        if (existing) {
-          if (title) existing.title = title;
-          if (updated_at) existing.updatedAt = updated_at;
-        } else if (id) {
-          this._conversations.unshift({
-            id,
-            title: title || "Chat",
-            updatedAt: updated_at || new Date().toISOString(),
-          });
+      case "homeassistant.error": {
+        if (this._streamingMsgId) {
+          const msgs = this._messages[this._activeConvId];
+          const msg = msgs && msgs.find((m) => m.id === this._streamingMsgId);
+          if (msg) {
+            msg.content =
+              (msg.content || "") + "\n\n*(Error: " + (payload.error || "unknown") + ")*";
+          }
+          this._finalizeStreamingMessage(this._streamingMsgId);
+        } else {
+          this._showSystemMsg("Error: " + (payload.error || "Unknown"));
         }
-        if (this._activeConvId === id && title && this._dom) {
+        break;
+      }
+
+      case "homeassistant.title": {
+        const convId = payload.conversation_id;
+        const title = payload.title;
+        const existing = this._conversations.find((c) => c.id === convId);
+        if (existing && title) existing.title = title;
+        if (this._activeConvId === convId && title && this._dom) {
           this._dom.topbarTitle.textContent = title;
         }
         this._renderConvList();
         break;
       }
 
-      case "transcription":
-        this._handleTranscription(data);
-        break;
-
-      case "error":
-        this._showSystemMsg("Error: " + (data.message || "Unknown error"));
-        if (this._isStreaming && this._streamingMsgId) {
-          this._finalizeStreamingMessage(this._streamingMsgId);
-        }
-        break;
-
       default:
         break;
+    }
+  }
+
+  async _loadConversations() {
+    try {
+      const res = await this._gwRequest("homeassistant.conversations", {
+        action: "list",
+        user_id: this._getUserId(),
+      });
+      this._conversations = (res?.conversations || []).map((c) => ({
+        id: c.id,
+        title: c.title || "Chat",
+        updatedAt: c.updated_at || new Date().toISOString(),
+      }));
+      this._renderConvList();
+      if (!this._activeConvId && this._conversations.length > 0) {
+        this._setActiveConv(this._conversations[0].id);
+      }
+    } catch (err) {
+      console.error("Failed to load conversations:", err);
     }
   }
 

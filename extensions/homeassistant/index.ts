@@ -7,6 +7,7 @@ import {
   finalizeInboundContext,
 } from "openclaw/plugin-sdk/reply-runtime";
 import { homeAssistantPlugin, setHaDispatch, setHaTranscribe } from "./src/channel.js";
+import { handleConversations, createSendHandler, handleTranscribe } from "./src/gateway-methods.js";
 
 export { homeAssistantPlugin } from "./src/channel.js";
 
@@ -15,7 +16,6 @@ interface HaConfig {
   token: string;
   secret?: string;
   admins?: string[];
-  ws_port?: number;
 }
 
 function haClient(config: HaConfig) {
@@ -51,6 +51,20 @@ export default defineChannelPluginEntry({
   registerFull(api) {
     const cfg = api.pluginConfig as unknown as HaConfig;
     const ha = haClient(cfg);
+
+    // ── Register gateway methods for HA panel communication ─────────────────
+    api.registerGatewayMethod(
+      "homeassistant.conversations",
+      handleConversations as Parameters<typeof api.registerGatewayMethod>[1],
+    );
+    api.registerGatewayMethod(
+      "homeassistant.send",
+      createSendHandler(() => api.config) as Parameters<typeof api.registerGatewayMethod>[1],
+    );
+    api.registerGatewayMethod(
+      "homeassistant.transcribe",
+      handleTranscribe as Parameters<typeof api.registerGatewayMethod>[1],
+    );
 
     // ── Wire audio transcription via OC's media understanding pipeline ─────
     setHaTranscribe(async ({ audioData, mime }) => {
