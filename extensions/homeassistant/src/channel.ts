@@ -100,10 +100,24 @@ export type HaDispatchFn = (params: {
   signal: AbortSignal;
 }) => Promise<void>;
 
+export type HaTranscribeFn = (params: {
+  audioData: Buffer;
+  mime: string;
+}) => Promise<{ text?: string }>;
+
 let dispatchFn: HaDispatchFn | null = null;
+let transcribeFn: HaTranscribeFn | null = null;
 
 export function setHaDispatch(fn: HaDispatchFn): void {
   dispatchFn = fn;
+}
+
+export function setHaTranscribe(fn: HaTranscribeFn): void {
+  transcribeFn = fn;
+}
+
+export function getHaTranscribe(): HaTranscribeFn | null {
+  return transcribeFn;
 }
 
 export function createHomeAssistantPlugin(): HaChannelPlugin {

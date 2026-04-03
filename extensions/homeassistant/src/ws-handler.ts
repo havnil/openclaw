@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { URL } from "node:url";
 import type { WebSocket } from "ws";
 import { verifyHandshake } from "./auth.js";
+import { getHaTranscribe } from "./channel.js";
 import { ConversationStore } from "./conversations.js";
 import type { HaUserIdentity, StoredMessage } from "./protocol.js";
 
@@ -326,6 +327,52 @@ export function handleHaWebSocket(
           }
         } finally {
           activeAbortController = null;
+        }
+        break;
+      }
+
+      case "transcribe": {
+        const audioBase64 = msg.audio as string;
+        const mime = (msg.mime as string) || "audio/webm";
+        const requestId = msg.request_id as string | undefined;
+
+        if (!audioBase64) {
+          send(ws, { type: "transcription", request_id: requestId, error: "No audio data" });
+          break;
+        }
+
+        const transcribe = getHaTranscribe();
+        if (!transcribe) {
+          send(ws, {
+            type: "transcription",
+            request_id: requestId,
+            error: "Transcription not available",
+          });
+          break;
+        }
+
+        try {
+          const audioBuffer = Buffer.from(audioBase64, "base64");
+          const result = await transcribe({ audioData: audioBuffer, mime });
+          const text = result.text || "";
+
+          // Gibberish detection: very short or mostly non-word characters
+          const isGibberish =
+            text.length > 0 &&
+            (text.length < 3 || /^[^a-zA-ZæøåÆØÅàáâãäéèêëíìîïóòôõöúùûü\s]{3,}$/.test(text));
+
+          send(ws, {
+            type: "transcription",
+            request_id: requestId,
+            text: isGibberish ? "" : text,
+            retry: isGibberish || !text,
+          });
+        } catch (err) {
+          send(ws, {
+            type: "transcription",
+            request_id: requestId,
+            error: String(err),
+          });
         }
         break;
       }

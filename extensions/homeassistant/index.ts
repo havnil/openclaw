@@ -6,7 +6,7 @@ import {
   dispatchInboundMessage,
   finalizeInboundContext,
 } from "openclaw/plugin-sdk/reply-runtime";
-import { homeAssistantPlugin, setHaDispatch } from "./src/channel.js";
+import { homeAssistantPlugin, setHaDispatch, setHaTranscribe } from "./src/channel.js";
 
 export { homeAssistantPlugin } from "./src/channel.js";
 
@@ -51,6 +51,29 @@ export default defineChannelPluginEntry({
   registerFull(api) {
     const cfg = api.pluginConfig as unknown as HaConfig;
     const ha = haClient(cfg);
+
+    // ── Wire audio transcription via OC's media understanding pipeline ─────
+    setHaTranscribe(async ({ audioData, mime }) => {
+      const { writeFile, unlink } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      const { randomUUID } = await import("node:crypto");
+      const ext = mime.includes("webm") ? "webm" : mime.includes("wav") ? "wav" : "ogg";
+      const tmpPath = join(
+        (await import("node:os")).tmpdir(),
+        `openclaw-ha-audio-${randomUUID()}.${ext}`,
+      );
+      try {
+        await writeFile(tmpPath, audioData);
+        const result = await api.runtime.mediaUnderstanding.transcribeAudioFile({
+          filePath: tmpPath,
+          cfg: api.config,
+          mime,
+        });
+        return { text: result.text?.trim() || undefined };
+      } finally {
+        await unlink(tmpPath).catch(() => {});
+      }
+    });
 
     // ── Wire the AI dispatch for the WebSocket channel ─────────────────────
     setHaDispatch(async ({ cfg: fullCfg, user, text, onToken, onDone, onError }) => {

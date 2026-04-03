@@ -609,6 +609,14 @@ const STYLES = `
     0%, 100% { box-shadow: 0 0 0 0 rgba(244,67,54,0.4); }
     50% { box-shadow: 0 0 0 8px rgba(244,67,54,0); }
   }
+  .input-btn.mic-processing {
+    color: var(--primary-color, #03a9f4);
+    animation: mic-spin 1s linear infinite;
+  }
+  @keyframes mic-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
   .input-btn.send-btn {
     background: var(--primary-color, #03a9f4);
     color: #fff;
@@ -1632,11 +1640,11 @@ class OpenClawPanel extends HTMLElement {
     }
   }
 
-  // ── Voice input ──────────────────────────────────────────────────────────
+  // ── Voice input (server-side transcription via OC media understanding) ───
 
   _checkSpeechSupport() {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
+    // MediaRecorder is widely supported — always show mic button
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
       if (this._dom) this._dom.micBtn.style.display = "none";
     }
   }
@@ -1649,41 +1657,98 @@ class OpenClawPanel extends HTMLElement {
     }
   }
 
-  _startMic() {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return;
-    this._recognition = new SR();
-    this._recognition.continuous = false;
-    this._recognition.interimResults = false;
-    this._recognition.lang = this._hass?.locale?.language || "en-US";
+  async _startMic() {
+    if (!navigator.mediaDevices || !window.MediaRecorder) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this._mediaStream = stream;
 
-    this._recognition.onresult = (e) => {
-      const transcript = Array.from(e.results)
-        .map((r) => r[0].transcript)
-        .join(" ");
-      if (this._dom) {
-        this._dom.inputTextarea.value += (this._dom.inputTextarea.value ? " " : "") + transcript;
-        this._autoResizeTextarea();
-      }
-    };
+      // Use webm/opus if supported, fall back to wav
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      this._mediaRecorder = new MediaRecorder(stream, { mimeType });
+      this._audioChunks = [];
 
-    this._recognition.onerror = () => this._stopMic();
-    this._recognition.onend = () => this._stopMic();
+      this._mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) this._audioChunks.push(e.data);
+      };
 
-    this._recognition.start();
-    this._micActive = true;
-    if (this._dom) this._dom.micBtn.classList.add("mic-active");
+      this._mediaRecorder.onstop = () => {
+        this._processRecording();
+      };
+
+      this._mediaRecorder.start();
+      this._micActive = true;
+      if (this._dom) this._dom.micBtn.classList.add("mic-active");
+    } catch (err) {
+      console.error("Microphone access denied:", err);
+      this._showSystemMsg("Microphone access denied. Check browser permissions.");
+    }
   }
 
   _stopMic() {
-    if (this._recognition) {
-      try {
-        this._recognition.stop();
-      } catch (_) {}
-      this._recognition = null;
+    if (this._mediaRecorder && this._mediaRecorder.state !== "inactive") {
+      this._mediaRecorder.stop();
+    }
+    if (this._mediaStream) {
+      this._mediaStream.getTracks().forEach((t) => t.stop());
+      this._mediaStream = null;
     }
     this._micActive = false;
     if (this._dom) this._dom.micBtn.classList.remove("mic-active");
+  }
+
+  async _processRecording() {
+    if (!this._audioChunks || this._audioChunks.length === 0) return;
+
+    const blob = new Blob(this._audioChunks, { type: "audio/webm" });
+    this._audioChunks = [];
+
+    // Show a temporary status
+    if (this._dom) {
+      this._dom.micBtn.classList.add("mic-processing");
+    }
+
+    // Convert to base64
+    const buffer = await blob.arrayBuffer();
+    const base64 = btoa(
+      new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ""),
+    );
+
+    // Send to server for transcription
+    const requestId = uid();
+    this._pendingTranscription = requestId;
+    this._wsSend({
+      type: "transcribe",
+      audio: base64,
+      mime: "audio/webm",
+      request_id: requestId,
+    });
+  }
+
+  _handleTranscription(data) {
+    if (this._dom) {
+      this._dom.micBtn.classList.remove("mic-processing");
+    }
+
+    if (data.error) {
+      this._showSystemMsg("Transcription failed: " + data.error);
+      return;
+    }
+
+    if (data.retry || !data.text) {
+      this._showSystemMsg("Could not understand. Please try again.");
+      return;
+    }
+
+    // Insert transcribed text into the input
+    if (this._dom && data.text) {
+      const existing = this._dom.inputTextarea.value;
+      this._dom.inputTextarea.value = existing + (existing ? " " : "") + data.text;
+      this._autoResizeTextarea();
+      this._dom.inputTextarea.focus();
+    }
   }
 
   // ── WebSocket ────────────────────────────────────────────────────────────
@@ -1878,6 +1943,10 @@ class OpenClawPanel extends HTMLElement {
         this._renderConvList();
         break;
       }
+
+      case "transcription":
+        this._handleTranscription(data);
+        break;
 
       case "error":
         this._showSystemMsg("Error: " + (data.message || "Unknown error"));
