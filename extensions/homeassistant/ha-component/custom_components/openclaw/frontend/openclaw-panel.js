@@ -1916,19 +1916,19 @@ class OpenClawPanel extends HTMLElement {
           this._ws.close();
         },
       };
+      const connectParams = {
+        minProtocol: 3,
+        maxProtocol: 3,
+        client: { id: "openclaw-control-ui", version: "1.0", platform: "web", mode: "webchat" },
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+      };
+      const secret = this._getSecret();
+      if (secret) {
+        connectParams.auth = { token: secret };
+      }
       this._ws.send(
-        JSON.stringify({
-          type: "req",
-          id: connectId,
-          method: "connect",
-          params: {
-            minProtocol: 3,
-            maxProtocol: 3,
-            client: { id: "openclaw-control-ui", version: "1.0", platform: "web", mode: "webchat" },
-            role: "operator",
-            scopes: ["operator.read", "operator.write"],
-          },
-        }),
+        JSON.stringify({ type: "req", id: connectId, method: "connect", params: connectParams }),
       );
     });
 
