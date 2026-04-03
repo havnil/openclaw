@@ -919,13 +919,30 @@ class OpenClawPanel extends HTMLElement {
   _bindEvents() {
     const d = this._dom;
 
-    // Helper: bind both click and touchend for iOS WebView compatibility
+    // Helper: tap handling for iOS WKWebView shadow DOM compatibility.
     const onTap = (el, fn) => {
-      el.addEventListener("click", fn);
+      let touchMoved = false;
+      el.addEventListener(
+        "touchstart",
+        () => {
+          touchMoved = false;
+        },
+        { passive: true },
+      );
+      el.addEventListener(
+        "touchmove",
+        () => {
+          touchMoved = true;
+        },
+        { passive: true },
+      );
       el.addEventListener("touchend", (e) => {
-        e.preventDefault();
-        fn(e);
+        if (!touchMoved) {
+          e.preventDefault();
+          fn(e);
+        }
       });
+      el.addEventListener("click", fn);
     };
 
     // Sidebar toggle (mobile)

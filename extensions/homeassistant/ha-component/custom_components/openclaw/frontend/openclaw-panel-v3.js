@@ -130,6 +130,8 @@ const STYLES = `
     display: flex;
     flex-direction: column;
     height: 100%;
+    height: -webkit-fill-available;
+    min-height: 300px;
     width: 100%;
     overflow: hidden;
     font-family: var(--ha-font-body, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
@@ -919,13 +921,32 @@ class OpenClawPanel extends HTMLElement {
   _bindEvents() {
     const d = this._dom;
 
-    // Helper: bind both click and touchend for iOS WebView compatibility
+    // Helper: tap handling for iOS WKWebView shadow DOM compatibility.
+    // WKWebView on iPhone may not fire 'click' on buttons inside shadow DOM.
+    // Use touchstart/touchend with move detection to avoid scroll conflicts.
     const onTap = (el, fn) => {
-      el.addEventListener("click", fn);
+      let touchMoved = false;
+      el.addEventListener(
+        "touchstart",
+        () => {
+          touchMoved = false;
+        },
+        { passive: true },
+      );
+      el.addEventListener(
+        "touchmove",
+        () => {
+          touchMoved = true;
+        },
+        { passive: true },
+      );
       el.addEventListener("touchend", (e) => {
-        e.preventDefault();
-        fn(e);
+        if (!touchMoved) {
+          e.preventDefault();
+          fn(e);
+        }
       });
+      el.addEventListener("click", fn);
     };
 
     // Sidebar toggle (mobile)
