@@ -138,10 +138,6 @@ const STYLES = `
     background: var(--lovelace-background, var(--ha-background, #fafafa));
     box-sizing: border-box;
     -webkit-tap-highlight-color: transparent;
-    -webkit-touch-callout: none;
-    -webkit-user-select: none;
-    user-select: none;
-    touch-action: manipulation;
   }
 
   *, *::before, *::after { box-sizing: inherit; }
@@ -605,7 +601,6 @@ const STYLES = `
   }
   .input-btn:hover { background: var(--secondary-background-color, rgba(0,0,0,0.06)); color: var(--primary-text-color, #212121); }
   .input-btn:active { background: var(--divider-color, #e0e0e0); }
-  .input-btn { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   .input-btn:disabled { opacity: 0.35; cursor: not-allowed; }
   .input-btn.mic-active {
     color: #f44336;
@@ -895,28 +890,6 @@ class OpenClawPanel extends HTMLElement {
 
     this._bindEvents();
     this._checkSpeechSupport();
-    // Debug: verify buttons are found and clickable
-    console.log(
-      "[openclaw] DOM ready, sendBtn:",
-      !!this._dom.sendBtn,
-      "homeBtn:",
-      !!this._dom.homeBtn,
-    );
-    // Fallback: direct onclick on send button
-    if (this._dom.sendBtn) {
-      this._dom.sendBtn.onclick = () => {
-        console.log("[openclaw] send clicked");
-        if (this._isStreaming) this._stopStreaming();
-        else this._sendMessage();
-      };
-    }
-    if (this._dom.homeBtn) {
-      this._dom.homeBtn.onclick = () => {
-        console.log("[openclaw] home clicked");
-        window.history.pushState(null, "", "/");
-        window.dispatchEvent(new PopStateEvent("popstate"));
-      };
-    }
     this._renderConvList();
     this._renderMessages();
   }
@@ -966,33 +939,7 @@ class OpenClawPanel extends HTMLElement {
   _bindEvents() {
     const d = this._dom;
 
-    // Helper: tap handling for iOS WKWebView shadow DOM compatibility.
-    // WKWebView on iPhone may not fire 'click' on buttons inside shadow DOM.
-    // Use touchstart/touchend with move detection to avoid scroll conflicts.
-    const onTap = (el, fn) => {
-      let touchMoved = false;
-      el.addEventListener(
-        "touchstart",
-        () => {
-          touchMoved = false;
-        },
-        { passive: true },
-      );
-      el.addEventListener(
-        "touchmove",
-        () => {
-          touchMoved = true;
-        },
-        { passive: true },
-      );
-      el.addEventListener("touchend", (e) => {
-        if (!touchMoved) {
-          e.preventDefault();
-          fn(e);
-        }
-      });
-      el.addEventListener("click", fn);
-    };
+    const onTap = (el, fn) => el.addEventListener("click", fn);
 
     // Sidebar toggle (mobile)
     onTap(d.hamburgerBtn, () => this._toggleSidebar());
