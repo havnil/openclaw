@@ -738,6 +738,7 @@ class OpenClawPanel extends HTMLElement {
           <div class="input-wrap">
             <textarea class="input-textarea" rows="1" placeholder="Message OpenClaw…"></textarea>
           </div>
+          <button class="input-btn mic-btn" title="Voice input">${ICON.mic}</button>
           <button class="input-btn send-btn" title="Send">${ICON.send}</button>
         </div>
       </div>
@@ -781,7 +782,93 @@ class OpenClawPanel extends HTMLElement {
       self._input.style.height = Math.min(self._input.scrollHeight, 120) + "px";
     });
 
+    // Mic button
+    this._micBtn = shadow.querySelector(".mic-btn");
+    this._micActive = false;
+    this._micBtn.addEventListener("click", function () {
+      if (self._micActive) self._stopMic();
+      else self._startMic();
+    });
+
     this._connectGateway();
+  }
+
+  // ── Voice input ──
+  async _startMic() {
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+      this._status.textContent = "Mic needs HTTPS";
+      return;
+    }
+    try {
+      var stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this._mediaStream = stream;
+      var mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      this._mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType });
+      this._audioChunks = [];
+      var self = this;
+      this._mediaRecorder.ondataavailable = function (e) {
+        if (e.data.size > 0) self._audioChunks.push(e.data);
+      };
+      this._mediaRecorder.onstop = function () {
+        self._processRecording();
+      };
+      this._mediaRecorder.start();
+      this._micActive = true;
+      this._micBtn.classList.add("mic-active");
+    } catch (err) {
+      this._status.textContent = "Mic denied";
+    }
+  }
+
+  _stopMic() {
+    if (this._mediaRecorder && this._mediaRecorder.state !== "inactive") this._mediaRecorder.stop();
+    if (this._mediaStream) {
+      this._mediaStream.getTracks().forEach(function (t) {
+        t.stop();
+      });
+      this._mediaStream = null;
+    }
+    this._micActive = false;
+    this._micBtn.classList.remove("mic-active");
+  }
+
+  async _processRecording() {
+    if (!this._audioChunks || this._audioChunks.length === 0) return;
+    var blob = new Blob(this._audioChunks, { type: "audio/webm" });
+    this._audioChunks = [];
+    this._micBtn.classList.add("mic-processing");
+
+    var buffer = await blob.arrayBuffer();
+    var bytes = new Uint8Array(buffer);
+    var binary = "";
+    for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    var base64 = btoa(binary);
+
+    try {
+      var res = await this._gwRequest("homeassistant.transcribe", {
+        audio: base64,
+        mime: "audio/webm",
+      });
+      this._micBtn.classList.remove("mic-processing");
+      if (res.retry || !res.text) {
+        this._status.textContent = "Couldn't understand. Try again.";
+        setTimeout(() => {
+          this._status.textContent = "Connected";
+        }, 3000);
+      } else {
+        var existing = this._input.value;
+        this._input.value = existing + (existing ? " " : "") + res.text;
+        this._input.focus();
+      }
+    } catch (err) {
+      this._micBtn.classList.remove("mic-processing");
+      this._status.textContent = "Transcribe failed";
+      setTimeout(() => {
+        this._status.textContent = "Connected";
+      }, 3000);
+    }
   }
 
   // ── Sidebar ──
