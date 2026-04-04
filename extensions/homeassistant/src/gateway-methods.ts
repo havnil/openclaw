@@ -253,12 +253,13 @@ export const handleTranscribe: GatewayMethodHandler = async ({ params, respond }
 
   try {
     const audioBuffer = Buffer.from(audioBase64, "base64");
+    console.log(`[ha:transcribe] audio size: ${audioBuffer.length} bytes, mime: ${mime}`);
     const result = await transcribe({ audioData: audioBuffer, mime });
     const text = result.text || "";
+    console.log(`[ha:transcribe] result: "${text}" (${text.length} chars)`);
 
-    const isGibberish =
-      text.length > 0 &&
-      (text.length < 3 || /^[^a-zA-ZæøåÆØÅàáâãäéèêëíìîïóòôõöúùûü\s]{3,}$/.test(text));
+    // Only flag as gibberish if it's very short AND has no real letters
+    const isGibberish = text.length > 0 && text.length < 2;
 
     respond(true, {
       text: isGibberish ? "" : text,
