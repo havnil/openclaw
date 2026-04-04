@@ -177,7 +177,7 @@ const STYLES = `
   .conv-item.swiped .conv-actions { transform: translateX(-72px); transition: transform 0.2s; }
 
   /* Overlay for mobile sidebar */
-  .sidebar-overlay {
+  .sidebar-overlay { pointer-events: none;
     display: none;
     position: fixed;
     inset: 0;
@@ -642,7 +642,7 @@ const STYLES = `
       box-shadow: 2px 0 16px rgba(0,0,0,0.15);
     }
     .sidebar.open { transform: translateX(0); }
-    .sidebar-overlay { display: block; }
+    .sidebar-overlay { pointer-events: none; display: block; }
     .sidebar-overlay.visible { opacity: 1; pointer-events: all; }
     .hamburger-btn { display: flex; }
     .conn-status { display: none; }
@@ -660,9 +660,22 @@ const STYLES = `
 function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
-
 function escapeHtml(str) {
   return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function renderMarkdown(text) {
+  if (!text) return "";
+  var html = escapeHtml(text);
+  html = html.replace(
+    /```(\w*)\n?([\s\S]*?)```/g,
+    (_, lang, code) => "<pre><code>" + code + "</code></pre>",
+  );
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
+  html = html.replace(/\n/g, "<br>");
+  return html;
 }
 
 class OpenClawPanel extends HTMLElement {
@@ -683,6 +696,7 @@ class OpenClawPanel extends HTMLElement {
     this._conn = true;
     this._try();
   }
+
   _try() {
     if (this._done || !this._conn || !this._hass || !this._panel) return;
     this._done = true;
@@ -692,6 +706,9 @@ class OpenClawPanel extends HTMLElement {
     this._pending = {};
     this._connId = null;
     this._streamEl = null;
+    this._conversations = [];
+    this._activeConvId = null;
+    this._messageCache = {};
 
     var shadow = this.attachShadow({ mode: "open" });
     var style = document.createElement("style");
@@ -701,8 +718,17 @@ class OpenClawPanel extends HTMLElement {
     var layout = document.createElement("div");
     layout.className = "layout";
     layout.innerHTML = `
+      <div class="sidebar-overlay"></div>
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <span class="sidebar-title">OpenClaw</span>
+          <button class="btn-new-chat" title="New conversation">${ICON.newchat} New Chat</button>
+        </div>
+        <div class="conv-list"></div>
+      </div>
       <div class="main">
         <div class="topbar">
+          <button class="hamburger-btn" title="Menu">${ICON.hamburger}</button>
           <span class="topbar-title">OpenClaw</span>
           <span class="conn-status disconnected">Connecting...</span>
           <button class="home-btn" title="Back">${ICON.home}</button>
@@ -720,17 +746,29 @@ class OpenClawPanel extends HTMLElement {
 
     this._shadow = shadow;
     this._status = shadow.querySelector(".conn-status");
-    this._messages = shadow.querySelector(".messages-container");
+    this._messagesEl = shadow.querySelector(".messages-container");
     this._input = shadow.querySelector(".input-textarea");
-    this._sendBtn = shadow.querySelector(".send-btn");
+    this._convList = shadow.querySelector(".conv-list");
+    this._sidebar = shadow.querySelector(".sidebar");
+    this._overlay = shadow.querySelector(".sidebar-overlay");
+    this._topTitle = shadow.querySelector(".topbar-title");
 
-    // Events
     var self = this;
     shadow.querySelector(".home-btn").addEventListener("click", function () {
       location.href = "/";
     });
-    this._sendBtn.addEventListener("click", function () {
+    shadow.querySelector(".send-btn").addEventListener("click", function () {
       self._send();
+    });
+    shadow.querySelector(".hamburger-btn").addEventListener("click", function () {
+      self._toggleSidebar();
+    });
+    this._overlay.addEventListener("click", function () {
+      self._closeSidebar();
+    });
+    shadow.querySelector(".btn-new-chat").addEventListener("click", function () {
+      self._newConversation();
+      self._closeSidebar();
     });
     this._input.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -738,44 +776,225 @@ class OpenClawPanel extends HTMLElement {
         self._send();
       }
     });
+    this._input.addEventListener("input", function () {
+      self._input.style.height = "auto";
+      self._input.style.height = Math.min(self._input.scrollHeight, 120) + "px";
+    });
 
-    // Connect
     this._connectGateway();
   }
 
+  // ── Sidebar ──
+  _toggleSidebar() {
+    this._sidebar.classList.toggle("open");
+    this._overlay.classList.toggle("visible");
+  }
+  _closeSidebar() {
+    this._sidebar.classList.remove("open");
+    this._overlay.classList.remove("visible");
+  }
+
+  // ── Conversations ──
+  async _newConversation() {
+    try {
+      var res = await this._gwRequest("homeassistant.conversations", {
+        action: "create",
+        user_id: this._user.id,
+      });
+      this._conversations.unshift({
+        id: res.id,
+        title: res.title || "New Chat",
+        updatedAt: new Date().toISOString(),
+      });
+      this._messageCache[res.id] = [];
+      this._setActiveConv(res.id);
+    } catch (e) {
+      // Fallback
+      var id = uid();
+      this._conversations.unshift({
+        id: id,
+        title: "New Chat",
+        updatedAt: new Date().toISOString(),
+      });
+      this._messageCache[id] = [];
+      this._setActiveConv(id);
+    }
+    this._renderConvList();
+  }
+
+  _setActiveConv(id) {
+    this._activeConvId = id;
+    this._streamEl = null;
+    var conv = this._conversations.find(function (c) {
+      return c.id === id;
+    });
+    this._topTitle.textContent = conv ? conv.title : "OpenClaw";
+    this._renderMessages();
+    this._renderConvList();
+    if (!this._messageCache[id]) {
+      this._loadHistory(id);
+    }
+  }
+
+  async _loadHistory(id) {
+    try {
+      var res = await this._gwRequest("homeassistant.conversations", {
+        action: "load",
+        user_id: this._user.id,
+        conversation_id: id,
+      });
+      if (res && res.messages) {
+        this._messageCache[id] = res.messages;
+        if (this._activeConvId === id) this._renderMessages();
+      }
+    } catch (e) {}
+  }
+
+  async _deleteConversation(id) {
+    this._conversations = this._conversations.filter(function (c) {
+      return c.id !== id;
+    });
+    delete this._messageCache[id];
+    if (this._activeConvId === id) {
+      this._activeConvId = this._conversations[0]?.id || null;
+      if (this._activeConvId) this._setActiveConv(this._activeConvId);
+      else this._renderMessages();
+    }
+    this._renderConvList();
+    this._gwRequest("homeassistant.conversations", {
+      action: "delete",
+      user_id: this._user.id,
+      conversation_id: id,
+    }).catch(function () {});
+  }
+
+  _renderConvList() {
+    var self = this;
+    this._convList.innerHTML = "";
+    this._conversations.forEach(function (conv) {
+      var el = document.createElement("div");
+      el.className = "conv-item" + (conv.id === self._activeConvId ? " active" : "");
+      el.innerHTML =
+        '<div class="conv-info"><div class="conv-title">' +
+        escapeHtml(conv.title) +
+        "</div></div>" +
+        '<div class="conv-actions"><button class="conv-action-btn" title="Delete">' +
+        ICON.trash +
+        "</button></div>";
+      el.querySelector(".conv-info").addEventListener("click", function () {
+        self._setActiveConv(conv.id);
+        self._closeSidebar();
+      });
+      el.querySelector(".conv-action-btn").addEventListener("click", function (e) {
+        e.stopPropagation();
+        self._deleteConversation(conv.id);
+      });
+      self._convList.appendChild(el);
+    });
+  }
+
+  _renderMessages() {
+    this._messagesEl.innerHTML = "";
+    var msgs = this._messageCache[this._activeConvId] || [];
+    var self = this;
+    if (msgs.length === 0) {
+      this._messagesEl.innerHTML =
+        '<div style="text-align:center;padding:40px;color:#9e9e9e;">Start a conversation</div>';
+      return;
+    }
+    msgs.forEach(function (m) {
+      var row = document.createElement("div");
+      row.className = "msg-row " + (m.role || "assistant");
+      var bubble = document.createElement("div");
+      bubble.className = "msg-bubble";
+      bubble.innerHTML =
+        m.role === "assistant"
+          ? renderMarkdown(m.content || m.text || "")
+          : escapeHtml(m.content || m.text || "");
+      row.appendChild(bubble);
+      self._messagesEl.appendChild(row);
+    });
+    this._messagesEl.scrollTop = this._messagesEl.scrollHeight;
+  }
+
+  // ── Send ──
   _send() {
     var text = this._input.value.trim();
     if (!text || !this._wsReady) return;
     this._input.value = "";
+    this._input.style.height = "auto";
 
-    // User bubble
+    // Ensure active conversation
+    if (!this._activeConvId) {
+      this._newConversation().then(() => this._doSend(text));
+      return;
+    }
+    this._doSend(text);
+  }
+
+  _doSend(text) {
+    var convId = this._activeConvId;
+    if (!this._messageCache[convId]) this._messageCache[convId] = [];
+
+    // User message
+    this._messageCache[convId].push({ role: "user", content: text });
     var um = document.createElement("div");
     um.className = "msg-row user";
     um.innerHTML = '<div class="msg-bubble">' + escapeHtml(text) + "</div>";
-    this._messages.appendChild(um);
+    this._messagesEl.appendChild(um);
 
     // Bot placeholder
     var bm = document.createElement("div");
     bm.className = "msg-row assistant";
     bm.innerHTML = '<div class="msg-bubble">...</div>';
-    this._messages.appendChild(bm);
+    this._messagesEl.appendChild(bm);
     this._streamEl = bm.querySelector(".msg-bubble");
-    this._messages.scrollTop = this._messages.scrollHeight;
+    this._streamText = "";
+    this._messagesEl.scrollTop = this._messagesEl.scrollHeight;
 
-    // Send via gateway
-    this._req("homeassistant.send", {
+    // Send
+    this._gwRequest("homeassistant.send", {
       secret: this._config.secret,
       user_id: this._user.id,
       user_name: this._user.name,
+      conversation_id: convId,
       content: text,
       conn_id: this._connId,
-    });
+    })
+      .then((res) => {
+        if (res?.new_conversation && res?.conversation_id) {
+          this._activeConvId = res.conversation_id;
+          this._messageCache[res.conversation_id] = this._messageCache[convId] || [];
+          this._conversations.unshift({
+            id: res.conversation_id,
+            title: "New Chat",
+            updatedAt: new Date().toISOString(),
+          });
+          this._renderConvList();
+        }
+      })
+      .catch((err) => {
+        if (this._streamEl) {
+          this._streamEl.innerHTML = "Error: " + escapeHtml(err.message);
+          this._streamEl = null;
+        }
+      });
   }
 
-  _req(method, params) {
-    var id = uid();
-    this._pending[id] = function () {};
-    this._ws.send(JSON.stringify({ type: "req", id: id, method: method, params: params }));
+  // ── Gateway ──
+  _gwRequest(method, params) {
+    var self = this;
+    return new Promise(function (resolve, reject) {
+      var id = uid();
+      self._pending[id] = { resolve: resolve, reject: reject };
+      self._ws.send(JSON.stringify({ type: "req", id: id, method: method, params: params }));
+      setTimeout(function () {
+        if (self._pending[id]) {
+          delete self._pending[id];
+          reject(new Error("timeout"));
+        }
+      }, 30000);
+    });
   }
 
   _connectGateway() {
@@ -790,15 +1009,17 @@ class OpenClawPanel extends HTMLElement {
 
     this._ws.onopen = function () {
       var id = uid();
-      self._pending[id] = function (ok, payload) {
-        if (ok) {
+      self._pending[id] = {
+        resolve: function (payload) {
           self._connId = payload?.server?.connId;
           self._wsReady = true;
           self._status.textContent = "Connected";
           self._status.className = "conn-status connected";
-        } else {
+          self._loadConversations();
+        },
+        reject: function (err) {
           self._status.textContent = "Auth failed";
-        }
+        },
       };
       self._ws.send(
         JSON.stringify({
@@ -820,19 +1041,11 @@ class OpenClawPanel extends HTMLElement {
     this._ws.onmessage = function (e) {
       var f = JSON.parse(e.data);
       if (f.type === "res" && self._pending[f.id]) {
-        self._pending[f.id](f.ok, f.payload, f.error);
+        var p = self._pending[f.id];
         delete self._pending[f.id];
+        f.ok ? p.resolve(f.payload) : p.reject(new Error(f.error?.message || "failed"));
       } else if (f.type === "event") {
-        if (f.event === "homeassistant.token" && self._streamEl) {
-          if (self._streamEl.textContent === "...") self._streamEl.textContent = "";
-          self._streamEl.textContent += f.payload?.token || "";
-          self._messages.scrollTop = self._messages.scrollHeight;
-        } else if (f.event === "homeassistant.done") {
-          self._streamEl = null;
-        } else if (f.event === "homeassistant.error" && self._streamEl) {
-          self._streamEl.textContent = "Error: " + (f.payload?.error || "unknown");
-          self._streamEl = null;
-        }
+        self._handleEvent(f.event, f.payload || {});
       }
     };
 
@@ -844,6 +1057,56 @@ class OpenClawPanel extends HTMLElement {
     this._ws.onerror = function () {
       self._status.textContent = "Error";
     };
+  }
+
+  _handleEvent(event, payload) {
+    if (event === "homeassistant.token" && this._streamEl) {
+      if (this._streamEl.textContent === "...") {
+        this._streamEl.textContent = "";
+        this._streamText = "";
+      }
+      this._streamText += payload.token || "";
+      this._streamEl.innerHTML = renderMarkdown(this._streamText);
+      this._messagesEl.scrollTop = this._messagesEl.scrollHeight;
+    } else if (event === "homeassistant.done") {
+      if (this._streamEl && this._streamText) {
+        this._messageCache[this._activeConvId]?.push({
+          role: "assistant",
+          content: this._streamText,
+        });
+      }
+      this._streamEl = null;
+      this._streamText = "";
+    } else if (event === "homeassistant.error" && this._streamEl) {
+      this._streamEl.innerHTML = "Error: " + escapeHtml(payload.error || "unknown");
+      this._streamEl = null;
+    } else if (event === "homeassistant.title") {
+      var conv = this._conversations.find(function (c) {
+        return c.id === payload.conversation_id;
+      });
+      if (conv) {
+        conv.title = payload.title;
+        this._renderConvList();
+      }
+      if (this._activeConvId === payload.conversation_id)
+        this._topTitle.textContent = payload.title;
+    }
+  }
+
+  async _loadConversations() {
+    try {
+      var res = await this._gwRequest("homeassistant.conversations", {
+        action: "list",
+        user_id: this._user.id,
+      });
+      this._conversations = (res?.conversations || []).map(function (c) {
+        return { id: c.id, title: c.title || "Chat", updatedAt: c.updated_at };
+      });
+      this._renderConvList();
+      if (this._conversations.length > 0 && !this._activeConvId) {
+        this._setActiveConv(this._conversations[0].id);
+      }
+    } catch (e) {}
   }
 
   disconnectedCallback() {
