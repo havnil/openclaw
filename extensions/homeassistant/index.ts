@@ -74,7 +74,15 @@ export default defineChannelPluginEntry({
       const { writeFile, unlink } = await import("node:fs/promises");
       const { join } = await import("node:path");
       const { randomUUID } = await import("node:crypto");
-      const ext = mime.includes("webm") ? "webm" : mime.includes("wav") ? "wav" : "ogg";
+      const ext = mime.includes("webm")
+        ? "webm"
+        : mime.includes("mp4")
+          ? "m4a"
+          : mime.includes("wav")
+            ? "wav"
+            : mime.includes("aac")
+              ? "aac"
+              : "ogg";
       const tmpPath = join(
         (await import("node:os")).tmpdir(),
         `openclaw-ha-audio-${randomUUID()}.${ext}`,

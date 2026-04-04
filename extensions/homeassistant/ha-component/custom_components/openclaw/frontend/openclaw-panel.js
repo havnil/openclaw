@@ -815,10 +815,17 @@ class OpenClawPanel extends HTMLElement {
     try {
       var stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       this._mediaStream = stream;
-      var mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : "audio/webm";
-      this._mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType });
+      // Detect supported audio format — iOS Safari doesn't support webm
+      var mimeType = "";
+      if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus"))
+        mimeType = "audio/webm;codecs=opus";
+      else if (MediaRecorder.isTypeSupported("audio/webm")) mimeType = "audio/webm";
+      else if (MediaRecorder.isTypeSupported("audio/mp4")) mimeType = "audio/mp4";
+      else if (MediaRecorder.isTypeSupported("audio/aac")) mimeType = "audio/aac";
+      // If no mime detected, let browser pick default
+      var recorderOpts = mimeType ? { mimeType: mimeType } : {};
+      this._recorderMime = mimeType || "audio/mp4";
+      this._mediaRecorder = new MediaRecorder(stream, recorderOpts);
       this._audioChunks = [];
       var self = this;
       this._mediaRecorder.ondataavailable = function (e) {
@@ -830,6 +837,7 @@ class OpenClawPanel extends HTMLElement {
       this._mediaRecorder.start();
       this._micActive = true;
       this._micBtn.classList.add("mic-active");
+      this._showToast("Recording...");
     } catch (err) {
       this._showToast("Microphone access denied");
     }
@@ -848,10 +856,15 @@ class OpenClawPanel extends HTMLElement {
   }
 
   async _processRecording() {
-    if (!this._audioChunks || this._audioChunks.length === 0) return;
-    var blob = new Blob(this._audioChunks, { type: "audio/webm" });
+    if (!this._audioChunks || this._audioChunks.length === 0) {
+      this._showToast("No audio recorded");
+      return;
+    }
+    var mime = this._recorderMime || "audio/mp4";
+    var blob = new Blob(this._audioChunks, { type: mime });
     this._audioChunks = [];
     this._micBtn.classList.add("mic-processing");
+    this._showToast("Transcribing...");
 
     var buffer = await blob.arrayBuffer();
     var bytes = new Uint8Array(buffer);
@@ -862,7 +875,7 @@ class OpenClawPanel extends HTMLElement {
     try {
       var res = await this._gwRequest("homeassistant.transcribe", {
         audio: base64,
-        mime: "audio/webm",
+        mime: mime,
       });
       this._micBtn.classList.remove("mic-processing");
       if (res.retry || !res.text) {
