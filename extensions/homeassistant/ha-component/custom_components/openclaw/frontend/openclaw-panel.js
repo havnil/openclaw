@@ -794,9 +794,22 @@ class OpenClawPanel extends HTMLElement {
   }
 
   // ── Voice input ──
+  _showToast(msg) {
+    var el = document.createElement("div");
+    el.textContent = msg;
+    el.setAttribute(
+      "style",
+      "position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:20px;font-size:14px;z-index:10000;",
+    );
+    (this._shadow || document.body).appendChild(el);
+    setTimeout(function () {
+      el.remove();
+    }, 3000);
+  }
+
   async _startMic() {
     if (!navigator.mediaDevices || !window.MediaRecorder) {
-      this._status.textContent = "Mic needs HTTPS";
+      this._showToast("Voice input requires HTTPS");
       return;
     }
     try {
@@ -818,7 +831,7 @@ class OpenClawPanel extends HTMLElement {
       this._micActive = true;
       this._micBtn.classList.add("mic-active");
     } catch (err) {
-      this._status.textContent = "Mic denied";
+      this._showToast("Microphone access denied");
     }
   }
 
@@ -853,10 +866,7 @@ class OpenClawPanel extends HTMLElement {
       });
       this._micBtn.classList.remove("mic-processing");
       if (res.retry || !res.text) {
-        this._status.textContent = "Couldn't understand. Try again.";
-        setTimeout(() => {
-          this._status.textContent = "Connected";
-        }, 3000);
+        this._showToast("Couldn't understand. Try again.");
       } else {
         var existing = this._input.value;
         this._input.value = existing + (existing ? " " : "") + res.text;
@@ -864,10 +874,7 @@ class OpenClawPanel extends HTMLElement {
       }
     } catch (err) {
       this._micBtn.classList.remove("mic-processing");
-      this._status.textContent = "Transcribe failed";
-      setTimeout(() => {
-        this._status.textContent = "Connected";
-      }, 3000);
+      this._showToast("Transcription failed");
     }
   }
 
