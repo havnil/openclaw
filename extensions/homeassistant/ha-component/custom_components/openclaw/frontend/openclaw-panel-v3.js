@@ -474,6 +474,8 @@ const STYLES = `
     background: var(--card-background-color, #fff);
     gap: 4px;
     flex-shrink: 0;
+    position: relative;
+    z-index: 10;
   }
 
   .input-btn {
