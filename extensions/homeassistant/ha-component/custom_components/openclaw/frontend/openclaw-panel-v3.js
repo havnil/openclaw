@@ -190,6 +190,7 @@ const STYLES = `
   /* ── Main area ── */
   .main {
     flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -264,6 +265,7 @@ const STYLES = `
   /* ── Messages ── */
   .messages-container {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     padding: 12px 8px 8px;
