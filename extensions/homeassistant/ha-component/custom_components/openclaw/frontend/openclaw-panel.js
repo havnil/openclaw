@@ -195,6 +195,7 @@ const STYLES = `
     flex-direction: column;
     min-width: 0;
     overflow: hidden;
+    position: relative;
   }
 
   /* ── Top bar ── */
@@ -264,14 +265,15 @@ const STYLES = `
 
   /* ── Messages ── */
   .messages-container {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
+    flex: 1 1 0;
+    overflow-y: scroll;
     -webkit-overflow-scrolling: touch;
     padding: 12px 8px 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    display: block;
+    min-height: 0;
+  }
+  .messages-container > * {
+    margin-bottom: 2px;
   }
 
   .day-divider {
