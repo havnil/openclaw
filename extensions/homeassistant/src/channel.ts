@@ -83,6 +83,8 @@ export type HaDispatchFn = (params: {
   conversationId: string;
   attachments?: Array<{ file_name: string; mime_type: string; data: string }>;
   onToken: (text: string) => void;
+  /** Generic signal that the agent is running a tool (no tool name available on this seam). */
+  onToolActivity?: () => void;
   onDone: (fullText: string) => void;
   onError: (message: string) => void;
   signal: AbortSignal;
@@ -147,8 +149,8 @@ export function createHomeAssistantPlugin(): HaChannelPlugin {
         inspectAccount: (cfg: OpenClawConfig) => {
           const account = resolveAccount(cfg);
           return {
-            enabled: !!account.token && !!account.secret,
-            configured: !!account.token,
+            enabled: Boolean(account.token) && Boolean(account.secret),
+            configured: Boolean(account.token),
           };
         },
       },

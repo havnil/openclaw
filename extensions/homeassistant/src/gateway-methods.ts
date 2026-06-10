@@ -51,7 +51,9 @@ function verifyUser(
 
 function generateTitle(text: string): string {
   const cleaned = text.replace(/\s+/g, " ").trim();
-  if (cleaned.length <= 40) return cleaned;
+  if (cleaned.length <= 40) {
+    return cleaned;
+  }
   const truncated = cleaned.slice(0, 40);
   const lastSpace = truncated.lastIndexOf(" ");
   return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + "...";
@@ -196,6 +198,9 @@ export function createSendHandler(getCfg: () => unknown): GatewayMethodHandler {
         onToken: (token) => {
           fullText += token;
           broadcastToConn("homeassistant.token", { conversation_id: convId, token });
+        },
+        onToolActivity: () => {
+          broadcastToConn("homeassistant.tool_call", { conversation_id: convId });
         },
         onDone: (doneText) => {
           fullText = doneText;

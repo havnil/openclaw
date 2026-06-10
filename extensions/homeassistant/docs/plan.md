@@ -1079,7 +1079,7 @@ The exact integration with `registerPluginHttpRoute` and the AI dispatch pipelin
 ```typescript
 // extensions/homeassistant/index.ts
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { WebSocketServer } from "ws";
 import { ConversationStore } from "./src/conversations.js";
 import { handleHaWebSocket } from "./src/ws-handler.js";

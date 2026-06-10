@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw Home Assistant channel and tools — chat panel with WebSocket streaming and REST API control",
   "type": "module",
+  "dependencies": {
+    "typebox": "1.1.39"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

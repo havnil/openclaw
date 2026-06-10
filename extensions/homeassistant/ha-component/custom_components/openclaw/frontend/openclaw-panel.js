@@ -263,6 +263,20 @@ const STYLES = `
   .conn-status.connecting { background: #fff8e1; color: #f57f17; }
   .conn-status.disconnected { background: #ffebee; color: #c62828; }
 
+  /* ── Reconnect banner ── */
+  .conn-banner {
+    display: none;
+    padding: 8px 12px;
+    text-align: center;
+    font-size: 13px;
+    cursor: pointer;
+    background: #fff8e1;
+    color: #f57f17;
+    flex-shrink: 0;
+  }
+  .conn-banner.error { background: #ffebee; color: #c62828; }
+  .conn-banner.visible { display: block; }
+
   /* ── Messages ── */
   .messages-container {
     flex: 1 1 0;
@@ -712,9 +726,14 @@ class OpenClawPanel extends HTMLElement {
     this._pending = {};
     this._connId = null;
     this._streamEl = null;
+    this._thinkingEl = null;
     this._conversations = [];
     this._activeConvId = null;
     this._messageCache = {};
+    this._reconnectAttempt = 0;
+    this._maxReconnectAttempts = 20;
+    this._reconnectTimer = null;
+    this._intentionalClose = false;
 
     var shadow = this.attachShadow({ mode: "open" });
     var style = document.createElement("style");
@@ -739,6 +758,7 @@ class OpenClawPanel extends HTMLElement {
           <span class="conn-status disconnected">Connecting...</span>
           <button class="home-btn" title="Back">${ICON.home}</button>
         </div>
+        <div class="conn-banner"></div>
         <div class="messages-container"></div>
         <div class="input-bar">
           <div class="input-wrap">
@@ -759,6 +779,7 @@ class OpenClawPanel extends HTMLElement {
     this._sidebar = shadow.querySelector(".sidebar");
     this._overlay = shadow.querySelector(".sidebar-overlay");
     this._topTitle = shadow.querySelector(".topbar-title");
+    this._banner = shadow.querySelector(".conn-banner");
 
     var self = this;
     shadow.querySelector(".home-btn").addEventListener("click", function () {
@@ -795,6 +816,25 @@ class OpenClawPanel extends HTMLElement {
       if (self._micActive) self._stopMic();
       else self._startMic();
     });
+
+    // Tap the reconnect banner to retry immediately.
+    this._banner.addEventListener("click", function () {
+      self._reconnectAttempt = 0;
+      if (self._reconnectTimer) {
+        clearTimeout(self._reconnectTimer);
+        self._reconnectTimer = null;
+      }
+      self._connectGateway();
+    });
+
+    // Keep the input bar above the on-screen keyboard on iOS.
+    if (window.visualViewport) {
+      this._onViewportResize = function () {
+        self.style.height = window.visualViewport.height + "px";
+      };
+      window.visualViewport.addEventListener("resize", this._onViewportResize);
+      window.visualViewport.addEventListener("scroll", this._onViewportResize);
+    }
 
     this._connectGateway();
   }
@@ -1059,9 +1099,10 @@ class OpenClawPanel extends HTMLElement {
     // Bot placeholder
     var bm = document.createElement("div");
     bm.className = "msg-row assistant";
-    bm.innerHTML = '<div class="msg-bubble">...</div>';
+    bm.innerHTML = '<div class="msg-bubble"><span class="thinking-text">…</span></div>';
     this._messagesEl.appendChild(bm);
     this._streamEl = bm.querySelector(".msg-bubble");
+    this._thinkingEl = bm.querySelector(".thinking-text");
     this._streamText = "";
     this._messagesEl.scrollTop = this._messagesEl.scrollHeight;
 
@@ -1126,6 +1167,12 @@ class OpenClawPanel extends HTMLElement {
         resolve: function (payload) {
           self._connId = payload?.server?.connId;
           self._wsReady = true;
+          self._reconnectAttempt = 0;
+          if (self._reconnectTimer) {
+            clearTimeout(self._reconnectTimer);
+            self._reconnectTimer = null;
+          }
+          self._hideBanner();
           self._status.textContent = "Connected";
           self._status.className = "conn-status connected";
           self._loadConversations();
@@ -1166,21 +1213,53 @@ class OpenClawPanel extends HTMLElement {
       self._wsReady = false;
       self._status.textContent = "Disconnected";
       self._status.className = "conn-status disconnected";
+      if (!self._intentionalClose) self._scheduleReconnect();
     };
     this._ws.onerror = function () {
+      // onclose fires after onerror; reconnect is scheduled there.
       self._status.textContent = "Error";
     };
   }
 
+  _scheduleReconnect() {
+    if (this._intentionalClose) return;
+    if (this._reconnectAttempt >= this._maxReconnectAttempts) {
+      this._showBanner("Could not reconnect. Tap to try again.", true);
+      return;
+    }
+    var delay = Math.min(1000 * Math.pow(2, this._reconnectAttempt), 30000);
+    this._reconnectAttempt++;
+    this._showBanner("Disconnected — reconnecting in " + Math.ceil(delay / 1000) + "s…", false);
+    var self = this;
+    this._reconnectTimer = setTimeout(function () {
+      self._connectGateway();
+    }, delay);
+  }
+
+  _showBanner(text, isError) {
+    if (!this._banner) return;
+    this._banner.textContent = text;
+    this._banner.className = "conn-banner visible" + (isError ? " error" : "");
+  }
+
+  _hideBanner() {
+    if (this._banner) this._banner.className = "conn-banner";
+  }
+
   _handleEvent(event, payload) {
     if (event === "homeassistant.token" && this._streamEl) {
-      if (this._streamEl.textContent === "...") {
-        this._streamEl.textContent = "";
+      if (this._thinkingEl) {
+        // First token clears the "thinking"/tool placeholder.
+        this._streamEl.innerHTML = "";
+        this._thinkingEl = null;
         this._streamText = "";
       }
       this._streamText += payload.token || "";
       this._streamEl.innerHTML = renderMarkdown(this._streamText);
       this._messagesEl.scrollTop = this._messagesEl.scrollHeight;
+    } else if (event === "homeassistant.tool_call" && this._thinkingEl) {
+      // No tool name is available on this seam; show a generic indicator.
+      this._thinkingEl.textContent = "Running a tool…";
     } else if (event === "homeassistant.done") {
       if (this._streamEl && this._streamText) {
         this._messageCache[this._activeConvId]?.push({
@@ -1223,6 +1302,15 @@ class OpenClawPanel extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this._intentionalClose = true;
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
+    if (this._onViewportResize && window.visualViewport) {
+      window.visualViewport.removeEventListener("resize", this._onViewportResize);
+      window.visualViewport.removeEventListener("scroll", this._onViewportResize);
+    }
     if (this._ws) this._ws.close();
   }
 }

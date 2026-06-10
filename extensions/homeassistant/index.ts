@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import {
@@ -6,6 +5,7 @@ import {
   dispatchInboundMessage,
   finalizeInboundContext,
 } from "openclaw/plugin-sdk/reply-runtime";
+import { Type } from "typebox";
 import { homeAssistantPlugin, setHaDispatch, setHaTranscribe } from "./src/channel.js";
 import { handleConversations, createSendHandler, handleTranscribe } from "./src/gateway-methods.js";
 
@@ -110,63 +110,72 @@ export default defineChannelPluginEntry({
     });
 
     // ── Wire the AI dispatch for the WebSocket channel ─────────────────────
-    setHaDispatch(async ({ cfg: fullCfg, user, text, onToken, onDone, onError }) => {
-      const agentId = user.is_admin ? "main" : "home";
+    setHaDispatch(
+      async ({ cfg: fullCfg, user, text, onToken, onToolActivity, onDone, onError }) => {
+        const agentId = user.is_admin ? "main" : "home";
 
-      const ctxPayload = finalizeInboundContext({
-        Body: text,
-        BodyForAgent: text,
-        BodyForCommands: text,
-        RawBody: text,
-        From: `ha:${user.user_id}`,
-        To: `ha:${user.user_id}`,
-        SessionKey: `ha:${user.user_id}`,
-        SenderName: user.user_name,
-        SenderId: user.user_id,
-        Provider: "homeassistant" as const,
-        Surface: "homeassistant" as const,
-        OriginatingChannel: "homeassistant" as const,
-        OriginatingTo: `ha:${user.user_id}`,
-        CommandAuthorized: user.is_admin,
-      });
+        const ctxPayload = finalizeInboundContext({
+          Body: text,
+          BodyForAgent: text,
+          BodyForCommands: text,
+          RawBody: text,
+          From: `ha:${user.user_id}`,
+          To: `ha:${user.user_id}`,
+          SessionKey: `ha:${user.user_id}`,
+          SenderName: user.user_name,
+          SenderId: user.user_id,
+          Provider: "homeassistant" as const,
+          Surface: "homeassistant" as const,
+          OriginatingChannel: "homeassistant" as const,
+          OriginatingTo: `ha:${user.user_id}`,
+          CommandAuthorized: user.is_admin,
+        });
 
-      const replyPipeline = createChannelReplyPipeline({
-        cfg: fullCfg,
-        agentId,
-        channel: "homeassistant",
-      });
+        const replyPipeline = createChannelReplyPipeline({
+          cfg: fullCfg,
+          agentId,
+          channel: "homeassistant",
+        });
 
-      const dispatcher = createReplyDispatcher({
-        ...replyPipeline,
-        deliver: async (payload, info) => {
-          // Only send block/final replies to the panel, not tool results
-          if (info.kind !== "tool" && payload.text) {
-            onDone(payload.text);
-          }
-        },
-        onError: (err) => {
-          onError(String(err));
-        },
-      });
+        const dispatcher = createReplyDispatcher({
+          ...replyPipeline,
+          deliver: async (payload, info) => {
+            // Tool results aren't shown in the panel, but signal generic tool
+            // activity so the UI can show a "running a tool" indicator. The reply
+            // dispatcher seam does not expose the tool name here.
+            if (info.kind === "tool") {
+              onToolActivity?.();
+              return;
+            }
+            // Only send block/final replies to the panel.
+            if (payload.text) {
+              onDone(payload.text);
+            }
+          },
+          onError: (err) => {
+            onError(String(err));
+          },
+        });
 
-      await dispatchInboundMessage({
-        ctx: ctxPayload,
-        cfg: fullCfg,
-        dispatcher,
-        replyOptions: {
-          onPartialReply: (() => {
-            let lastSent = "";
-            return async (payload: { text?: string }) => {
-              if (payload.text && payload.text.length > lastSent.length) {
-                const delta = payload.text.slice(lastSent.length);
-                lastSent = payload.text;
-                onToken(delta);
-              }
-            };
-          })(),
-        },
-      });
-    });
+        await dispatchInboundMessage({
+          ctx: ctxPayload,
+          cfg: fullCfg,
+          dispatcher,
+          replyOptions: {
+            onPartialReply: (() => {
+              let lastSent = "";
+              return async (payload: { text?: string }) => {
+                if (payload.text && payload.text.length > lastSent.length) {
+                  const delta = payload.text.slice(lastSent.length);
+                  lastSent = payload.text;
+                  onToken(delta);
+                }
+              };
+            })(),
+          },
+        });
+      },
+    );
 
     // ── ha_get_states ─────────────────────────────────────────────────────────
     api.registerTool({
@@ -179,7 +188,8 @@ export default defineChannelPluginEntry({
         entity_id: Type.Optional(Type.String({ description: "Entity ID, e.g. light.living_room" })),
       }),
       async execute(_id, params) {
-        const path = params.entity_id ? `/api/states/${params.entity_id}` : "/api/states";
+        const { entity_id } = params as { entity_id?: string };
+        const path = entity_id ? `/api/states/${entity_id}` : "/api/states";
         const data = await ha.request("GET", path);
         return {
           content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
@@ -207,10 +217,15 @@ export default defineChannelPluginEntry({
         ),
       }),
       async execute(_id, params) {
+        const { domain, service, service_data } = params as {
+          domain: string;
+          service: string;
+          service_data?: Record<string, unknown>;
+        };
         const data = await ha.request(
           "POST",
-          `/api/services/${params.domain}/${params.service}`,
-          params.service_data ?? {},
+          `/api/services/${domain}/${service}`,
+          service_data ?? {},
         );
         return {
           content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
@@ -237,9 +252,13 @@ export default defineChannelPluginEntry({
           ),
         }),
         async execute(_id, params) {
-          const hours = params.hours_back ?? 24;
+          const { entity_ids, hours_back } = params as {
+            entity_ids: string[];
+            hours_back?: number;
+          };
+          const hours = hours_back ?? 24;
           const start = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-          const ids = params.entity_ids.join(",");
+          const ids = entity_ids.join(",");
           const data = await ha.request(
             "GET",
             `/api/history/period/${start}?filter_entity_id=${ids}&minimal_response`,
@@ -268,11 +287,11 @@ export default defineChannelPluginEntry({
           ),
         }),
         async execute(_id, params) {
-          const data = await ha.request(
-            "POST",
-            `/api/events/${params.event_type}`,
-            params.event_data ?? {},
-          );
+          const { event_type, event_data } = params as {
+            event_type: string;
+            event_data?: Record<string, unknown>;
+          };
+          const data = await ha.request("POST", `/api/events/${event_type}`, event_data ?? {});
           return {
             content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
             details: {},
