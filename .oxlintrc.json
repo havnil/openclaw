@@ -211,6 +211,7 @@
     "extensions/diffs/assets/viewer-runtime.js",
     "extensions/diffs-language-pack/assets/viewer-runtime.js",
     "extensions/canvas/src/host/a2ui/a2ui.bundle.js",
+    "extensions/homeassistant/ha-component/custom_components/openclaw/frontend/openclaw-panel.js",
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml",

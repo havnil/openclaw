@@ -17,7 +17,9 @@ export const RESTRICTED_TOOL_PATTERNS: RegExp[] = [
 ];
 
 export function filterToolsForUser<T extends { name: string }>(tools: T[], isAdmin: boolean): T[] {
-  if (isAdmin) return tools;
+  if (isAdmin) {
+    return tools;
+  }
   return tools.filter(
     (tool) => !RESTRICTED_TOOL_PATTERNS.some((pattern) => pattern.test(tool.name)),
   );

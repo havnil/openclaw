@@ -37,7 +37,9 @@ function send(ws: WebSocket, msg: Record<string, unknown>): void {
  */
 function generateTitle(userText: string): string {
   const cleaned = userText.replace(/\s+/g, " ").trim();
-  if (cleaned.length <= 40) return cleaned;
+  if (cleaned.length <= 40) {
+    return cleaned;
+  }
   const truncated = cleaned.slice(0, 40);
   const lastSpace = truncated.lastIndexOf(" ");
   return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + "...";
@@ -73,7 +75,9 @@ export function handleHaWebSocket(
 
   // Keepalive ping every 30s
   const pingInterval = setInterval(() => {
-    if (ws.readyState === ws.OPEN) ws.ping();
+    if (ws.readyState === ws.OPEN) {
+      ws.ping();
+    }
   }, 30_000);
 
   ws.on("pong", () => {

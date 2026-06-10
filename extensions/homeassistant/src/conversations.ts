@@ -49,7 +49,9 @@ export class ConversationStore {
     }
     const convs: ConversationSummary[] = [];
     for (const file of files) {
-      if (!file.endsWith(".json")) continue;
+      if (!file.endsWith(".json")) {
+        continue;
+      }
       try {
         const raw = await readFile(join(dir, file), "utf-8");
         const conv: Conversation = JSON.parse(raw);
@@ -71,7 +73,9 @@ export class ConversationStore {
     try {
       const raw = await readFile(this.convPath(userId, convId), "utf-8");
       const conv: Conversation = JSON.parse(raw);
-      if (conv.user_id !== userId) return null;
+      if (conv.user_id !== userId) {
+        return null;
+      }
       return conv;
     } catch {
       return null;
@@ -80,7 +84,9 @@ export class ConversationStore {
 
   async appendMessage(convId: string, userId: string, message: StoredMessage): Promise<void> {
     const conv = await this.load(convId, userId);
-    if (!conv) return;
+    if (!conv) {
+      return;
+    }
     conv.messages.push(message);
     conv.updated_at = new Date().toISOString();
     await writeFile(this.convPath(userId, convId), JSON.stringify(conv, null, 2));
@@ -88,7 +94,9 @@ export class ConversationStore {
 
   async delete(convId: string, userId: string): Promise<void> {
     const conv = await this.load(convId, userId);
-    if (!conv) return;
+    if (!conv) {
+      return;
+    }
     try {
       await rm(this.convPath(userId, convId));
     } catch {
@@ -98,7 +106,9 @@ export class ConversationStore {
 
   async rename(convId: string, userId: string, title: string): Promise<void> {
     const conv = await this.load(convId, userId);
-    if (!conv) return;
+    if (!conv) {
+      return;
+    }
     conv.title = title;
     conv.updated_at = new Date().toISOString();
     await writeFile(this.convPath(userId, convId), JSON.stringify(conv, null, 2));

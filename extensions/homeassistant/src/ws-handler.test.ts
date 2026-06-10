@@ -391,7 +391,9 @@ describe("handleHaWebSocket", () => {
       dispatchMessage: vi.fn(async ({ signal }) => {
         capturedSignal = signal;
         // Simulate slow work
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5000);
+        });
       }),
     });
 
