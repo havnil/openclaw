@@ -12,12 +12,23 @@ const ICON = {
   close: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
   home: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>`,
 };
+var TOOL_LABELS = {
+  ha_get_states: "Sjekker enheter...",
+  ha_call_service: "Utforer kommando...",
+  ha_get_history: "Henter historikk...",
+  ha_fire_event: "Sender hendelse...",
+  memory_search: "Soker i hukommelse...",
+  memory_get: "Henter minne...",
+  web_fetch: "Henter fra nett...",
+  message: "Sender melding...",
+  exec: "Kjorer kommando...",
+};
 const STYLES = `
   :host, openclaw-panel {
     display: flex !important;
     flex-direction: column;
-    height: 100vh;
-    max-height: 100vh;
+    height: 100%;
+    max-height: 100%;
     width: 100%;
     overflow: hidden;
     font-family: var(--ha-font-body, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
@@ -52,7 +63,14 @@ const STYLES = `
     overflow: hidden;
     transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     z-index: 200;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    transform: translateX(-100%);
+    box-shadow: 2px 0 16px rgba(0,0,0,0.15);
   }
+  .sidebar.open { transform: translateX(0); }
 
   .sidebar-header {
     display: flex;
@@ -176,9 +194,10 @@ const STYLES = `
   .conv-item.swiped .conv-info,
   .conv-item.swiped .conv-actions { transform: translateX(-72px); transition: transform 0.2s; }
 
-  /* Overlay for mobile sidebar */
-  .sidebar-overlay { pointer-events: none;
-    display: none;
+  /* Overlay for sidebar */
+  .sidebar-overlay {
+    display: block;
+    pointer-events: none;
     position: fixed;
     inset: 0;
     background: rgba(0,0,0,0.4);
@@ -186,6 +205,7 @@ const STYLES = `
     opacity: 0;
     transition: opacity 0.25s;
   }
+  .sidebar-overlay.visible { opacity: 1; pointer-events: all; }
 
   /* ── Main area ── */
   .main {
@@ -211,7 +231,7 @@ const STYLES = `
   }
 
   .hamburger-btn {
-    display: none;
+    display: flex;
     align-items: center;
     justify-content: center;
     width: 44px;
@@ -259,23 +279,31 @@ const STYLES = `
     margin-left: 4px;
   }
   .home-btn:hover { background: var(--secondary-background-color, #f0f0f0); color: var(--primary-text-color, #212121); }
-  .conn-status.connected { background: #e8f5e9; color: #2e7d32; }
-  .conn-status.connecting { background: #fff8e1; color: #f57f17; }
-  .conn-status.disconnected { background: #ffebee; color: #c62828; }
+  .conn-status.connected { background: rgba(46, 125, 50, 0.15); color: #66bb6a; }
+  .conn-status.connecting { background: rgba(245, 127, 23, 0.15); color: #ffa726; }
+  .conn-status.disconnected { background: rgba(198, 40, 40, 0.15); color: #ef5350; }
 
-  /* ── Reconnect banner ── */
+  /* Connection banner */
   .conn-banner {
     display: none;
-    padding: 8px 12px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 500;
     text-align: center;
-    font-size: 13px;
-    cursor: pointer;
-    background: #fff8e1;
-    color: #f57f17;
     flex-shrink: 0;
+    cursor: pointer;
+    transition: all 0.2s;
   }
-  .conn-banner.error { background: #ffebee; color: #c62828; }
-  .conn-banner.visible { display: block; }
+  .conn-banner.warn {
+    display: block;
+    background: rgba(245, 127, 23, 0.12);
+    color: #ffa726;
+  }
+  .conn-banner.error {
+    display: block;
+    background: rgba(198, 40, 40, 0.12);
+    color: #ef5350;
+  }
 
   /* ── Messages ── */
   .messages-container {
@@ -301,30 +329,15 @@ const STYLES = `
   .msg-row {
     display: flex;
     flex-direction: column;
-    max-width: 82%;
+    max-width: 78%;
     margin-bottom: 4px;
   }
   .msg-row.user { align-self: flex-end; align-items: flex-end; }
   .msg-row.assistant { align-self: flex-start; align-items: flex-start; }
   .msg-row.system { align-self: center; max-width: 100%; }
 
-  .msg-avatar {
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    background: var(--primary-color, #03a9f4);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #fff;
-    font-size: 11px;
-    margin-bottom: 2px;
-    flex-shrink: 0;
-  }
-
   .msg-bubble {
     padding: 10px 14px;
-    border-radius: 18px;
     font-size: 14px;
     line-height: 1.5;
     -webkit-user-select: text;
@@ -336,14 +349,13 @@ const STYLES = `
   .msg-row.user .msg-bubble {
     background: var(--primary-color, #03a9f4);
     color: #fff;
-    border-bottom-right-radius: 4px;
+    border-radius: 20px 20px 4px 20px;
   }
 
   .msg-row.assistant .msg-bubble {
     background: var(--card-background-color, #fff);
     color: var(--primary-text-color, #212121);
-    border-bottom-left-radius: 4px;
-    border: 1px solid var(--divider-color, #e0e0e0);
+    border-radius: 20px 20px 20px 4px;
   }
 
   .msg-row.system .msg-bubble {
@@ -357,20 +369,20 @@ const STYLES = `
   .msg-bubble p { margin: 0 0 8px; }
   .msg-bubble p:last-child { margin-bottom: 0; }
   .msg-bubble pre {
-    background: rgba(0,0,0,0.08);
-    border-radius: 6px;
+    background: color-mix(in srgb, var(--primary-text-color, #212121) 8%, transparent);
+    border-radius: 8px;
     padding: 10px;
     overflow-x: auto;
-    font-size: 12px;
+    font-size: 13px;
     margin: 6px 0;
     white-space: pre-wrap;
     word-break: break-word;
   }
   .msg-bubble code {
-    background: rgba(0,0,0,0.08);
+    background: color-mix(in srgb, var(--primary-text-color, #212121) 8%, transparent);
     border-radius: 3px;
-    padding: 1px 4px;
-    font-size: 12px;
+    padding: 1px 5px;
+    font-size: 13px;
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   }
   .msg-bubble pre code { background: none; padding: 0; }
@@ -383,6 +395,14 @@ const STYLES = `
     color: var(--secondary-text-color, #757575);
     padding: 2px 4px;
     margin-top: 2px;
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-height 0.2s, opacity 0.2s;
+  }
+  .msg-row.show-time .msg-time {
+    max-height: 20px;
+    opacity: 1;
   }
 
   /* Tool call card */
@@ -459,61 +479,108 @@ const STYLES = `
     margin-bottom: 4px;
   }
 
-  /* Typing indicator */
-  .typing-indicator {
+  /* Thinking indicator */
+  .thinking-indicator {
     display: flex;
-    gap: 4px;
     align-items: center;
-    padding: 12px 14px;
+    gap: 8px;
+    padding: 2px 0;
   }
-  .typing-dot {
-    width: 7px;
-    height: 7px;
-    background: var(--secondary-text-color, #9e9e9e);
+  .thinking-dot {
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
-    animation: typing-bounce 1.2s infinite ease-in-out;
+    background: var(--primary-color, #03a9f4);
+    animation: thinking-pulse 1.5s ease-in-out infinite;
+    flex-shrink: 0;
   }
-  .typing-dot:nth-child(2) { animation-delay: 0.2s; }
-  .typing-dot:nth-child(3) { animation-delay: 0.4s; }
-  @keyframes typing-bounce {
-    0%, 80%, 100% { transform: translateY(0); }
-    40% { transform: translateY(-6px); }
+  @keyframes thinking-pulse {
+    0%, 100% { opacity: 0.3; transform: scale(0.85); }
+    50% { opacity: 1; transform: scale(1); }
+  }
+  .thinking-text {
+    font-size: 14px;
+    color: var(--secondary-text-color, #757575);
+    font-style: italic;
   }
 
   /* ── Input bar ── */
   .input-bar {
+    padding: 8px 12px;
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+    background: var(--lovelace-background, var(--ha-background, #fafafa));
+    flex-shrink: 0;
+  }
+
+  .input-container {
     display: flex;
     align-items: flex-end;
-    padding: 8px 8px;
-    padding-bottom: max(8px, env(safe-area-inset-bottom));
-    border-top: 1px solid var(--divider-color, #e0e0e0);
     background: var(--card-background-color, #fff);
+    border: 1px solid var(--divider-color, #e0e0e0);
+    border-radius: 22px;
+    padding: 4px 4px 4px 16px;
     gap: 4px;
+    transition: border-color 0.15s;
+  }
+  .input-container:focus-within {
+    border-color: var(--primary-color, #03a9f4);
+  }
+
+  .input-textarea {
+    flex: 1;
+    border: none;
+    background: transparent;
+    outline: none;
+    font-size: 15px;
+    line-height: 1.4;
+    padding: 8px 0;
+    resize: none;
+    max-height: 120px;
+    min-height: 22px;
+    font-family: inherit;
+    color: var(--primary-text-color, #212121);
+    overflow-y: auto;
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+  }
+  .input-textarea::placeholder { color: var(--secondary-text-color, #9e9e9e); }
+  .input-textarea:disabled { opacity: 0.6; cursor: not-allowed; }
+
+  .input-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
     flex-shrink: 0;
-    position: relative;
-    z-index: 10;
+    padding-bottom: 2px;
   }
 
   .input-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
     border: none;
-    border-radius: 12px;
+    border-radius: 50%;
     background: transparent;
     color: var(--secondary-text-color, #757575);
     cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s, color 0.12s, opacity 0.2s;
     padding: 0;
-    transition: background 0.12s, color 0.12s;
     flex-shrink: 0;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
   }
-  .input-btn:hover { background: var(--secondary-background-color, rgba(0,0,0,0.06)); color: var(--primary-text-color, #212121); }
-  .input-btn:active { background: var(--divider-color, #e0e0e0); }
-  .input-btn { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   .input-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  .input-btn.send-btn {
+    background: var(--primary-color, #03a9f4);
+    color: #fff;
+  }
+  .input-btn.send-btn:hover { opacity: 0.9; }
+
   .input-btn.mic-active {
     color: #f44336;
     animation: mic-pulse 1.5s infinite;
@@ -530,41 +597,6 @@ const STYLES = `
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
   }
-  .input-btn.send-btn {
-    background: var(--primary-color, #03a9f4);
-    color: #fff;
-    border-radius: 12px;
-  }
-  .input-btn.send-btn:hover { opacity: 0.9; background: var(--primary-color, #03a9f4); }
-  .input-btn.send-btn:disabled { background: var(--divider-color, #bdbdbd); }
-
-  .input-wrap {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .input-textarea {
-    width: 100%;
-    resize: none;
-    border: 1px solid var(--divider-color, #e0e0e0);
-    border-radius: 12px;
-    padding: 10px 12px;
-    font-size: 15px;
-    font-family: inherit;
-    line-height: 1.45;
-    background: var(--secondary-background-color, #f5f5f5);
-    color: var(--primary-text-color, #212121);
-    outline: none;
-    overflow-y: auto;
-    min-height: 44px;
-    max-height: calc(5 * 1.45 * 15px + 20px);
-    transition: border-color 0.15s;
-    display: block;
-  }
-  .input-textarea { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
-  .input-textarea:focus { border-color: var(--primary-color, #03a9f4); background: var(--card-background-color, #fff); }
-  .input-textarea::placeholder { color: var(--secondary-text-color, #9e9e9e); }
-  .input-textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 
   /* Attachment staging area */
   .attach-staging {
@@ -651,23 +683,6 @@ const STYLES = `
     max-width: 280px;
   }
 
-  /* ── Mobile overrides ── */
-  @media (max-width: 768px) {
-    .sidebar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      bottom: 0;
-      transform: translateX(-100%);
-      box-shadow: 2px 0 16px rgba(0,0,0,0.15);
-    }
-    .sidebar.open { transform: translateX(0); }
-    .sidebar-overlay { pointer-events: none; display: block; }
-    .sidebar-overlay.visible { opacity: 1; pointer-events: all; }
-    .hamburger-btn { display: flex; }
-    .conn-status { display: none; }
-  }
-
   /* ── Scrollbar styling ── */
   .messages-container::-webkit-scrollbar,
   .conv-list::-webkit-scrollbar { width: 4px; }
@@ -675,6 +690,102 @@ const STYLES = `
   .conv-list::-webkit-scrollbar-track { background: transparent; }
   .messages-container::-webkit-scrollbar-thumb,
   .conv-list::-webkit-scrollbar-thumb { background: var(--divider-color, #e0e0e0); border-radius: 4px; }
+
+  /* ══════════ Warm Slate theme (bold restyle) ══════════ */
+  :host, openclaw-panel {
+    --primary-color: #22c55e;
+    --primary-text-color: #eef2f6;
+    --secondary-text-color: #94a3b3;
+    --card-background-color: #1b2531;
+    --sidebar-background-color: #141b24;
+    --secondary-background-color: #1b2531;
+    --divider-color: #26313f;
+    background: radial-gradient(120% 60% at 50% 0%, #16202b 0%, #0f141b 60%) !important;
+    color: #eef2f6;
+  }
+  .topbar {
+    background: rgba(15,20,27,0.85);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border-bottom-color: #26313f;
+  }
+  .topbar-title { font-weight: 700; letter-spacing: 0.2px; }
+  /* connection status as a glowing dot + label */
+  .conn-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: transparent !important;
+    padding: 4px 6px;
+  }
+  .conn-status::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 8px currentColor;
+  }
+  .conn-status.connected { color: #34d399; }
+  .conn-status.connecting { color: #fbbf24; }
+  .conn-status.disconnected { color: #f87171; }
+  .conn-banner.warn { background: rgba(251,191,36,0.12); color: #fbbf24; }
+  .conn-banner.error { background: rgba(248,113,113,0.12); color: #f87171; }
+
+  /* user → green bubble */
+  .msg-row.user .msg-bubble {
+    background: linear-gradient(135deg, #22c55e, #16a34a);
+    color: #04210f;
+    font-weight: 550;
+    border-radius: 18px 18px 6px 18px;
+    box-shadow: 0 6px 18px rgba(34,197,94,0.22);
+  }
+  /* assistant → plain text (no card) */
+  .msg-row.user { margin-left: auto; margin-right: 0; align-items: flex-end; }
+  .msg-row.assistant { margin-right: auto; margin-left: 0; align-items: flex-start; max-width: 92%; }
+  .msg-row.assistant .msg-bubble {
+    background: transparent;
+    border: 0;
+    padding: 2px 4px;
+    border-radius: 0;
+    color: #eef2f6;
+  }
+  .msg-row.assistant .msg-bubble code,
+  .msg-row.assistant .msg-bubble pre {
+    background: #0c1118;
+    border: 1px solid #26313f;
+    color: #a7f3d0;
+  }
+  .msg-row.assistant .msg-bubble blockquote {
+    margin: 8px 0;
+    padding: 6px 12px;
+    border-left: 3px solid #22c55e;
+    background: rgba(34,197,94,0.06);
+    border-radius: 0 8px 8px 0;
+    color: #94a3b3;
+    font-style: italic;
+  }
+
+  /* input bar */
+  .input-bar { background: linear-gradient(0deg, #0f141b 70%, transparent); }
+  .input-textarea { color: #eef2f6; }
+
+  /* welcome / suggestion chips */
+  .welcome { padding: 10px 6px 4px; }
+  .welcome-title { font-size: 24px; font-weight: 750; margin-bottom: 4px; color: #eef2f6; }
+  .welcome-sub { font-size: 14px; color: #94a3b3; margin-bottom: 16px; }
+  .welcome-chips { display: flex; flex-wrap: wrap; gap: 9px; }
+  .welcome-chip {
+    padding: 10px 14px;
+    border: 1px solid #26313f;
+    background: #1b2531;
+    color: #eef2f6;
+    border-radius: 13px;
+    font-size: 13.5px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .welcome-chip:hover, .welcome-chip:active { border-color: #22c55e; background: #1f2b38; }
 `;
 
 function uid() {
@@ -694,8 +805,27 @@ function renderMarkdown(text) {
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
   html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
+  html = html.replace(
+    /^---$/gm,
+    '<hr style="border:none;border-top:1px solid var(--divider-color,#e0e0e0);margin:8px 0">',
+  );
+  html = html.replace(
+    /^&gt; (.+)$/gm,
+    '<div style="border-left:3px solid var(--divider-color,#e0e0e0);padding-left:10px;margin:4px 0;color:var(--secondary-text-color,#757575)">$1</div>',
+  );
   html = html.replace(/\n/g, "<br>");
   return html;
+}
+
+var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// Auto-format chat titles as "dd.Mon: topic" (idempotent).
+function formatChatTitle(raw, dateIso) {
+  var topic = (raw || "Chat").trim();
+  if (/^\d{1,2}\.[A-Za-z]{3}:\s/.test(topic)) return topic; // already formatted
+  var d = dateIso ? new Date(dateIso) : new Date();
+  if (isNaN(d.getTime())) d = new Date();
+  var day = String(d.getDate()).padStart(2, "0");
+  return day + "." + MONTHS[d.getMonth()] + ": " + topic;
 }
 
 class OpenClawPanel extends HTMLElement {
@@ -726,14 +856,14 @@ class OpenClawPanel extends HTMLElement {
     this._pending = {};
     this._connId = null;
     this._streamEl = null;
-    this._thinkingEl = null;
     this._conversations = [];
     this._activeConvId = null;
     this._messageCache = {};
+    this._thinkingEl = null;
+    this._renderTimer = null;
     this._reconnectAttempt = 0;
     this._maxReconnectAttempts = 20;
     this._reconnectTimer = null;
-    this._intentionalClose = false;
 
     var shadow = this.attachShadow({ mode: "open" });
     var style = document.createElement("style");
@@ -753,19 +883,21 @@ class OpenClawPanel extends HTMLElement {
       </div>
       <div class="main">
         <div class="topbar">
-          <button class="hamburger-btn" title="Menu">${ICON.hamburger}</button>
+          <button class="home-btn" title="Back">${ICON.home}</button>
+          <button class="hamburger-btn" title="Chat history">${ICON.hamburger}</button>
           <span class="topbar-title">OpenClaw</span>
           <span class="conn-status disconnected">Connecting...</span>
-          <button class="home-btn" title="Back">${ICON.home}</button>
         </div>
         <div class="conn-banner"></div>
         <div class="messages-container"></div>
         <div class="input-bar">
-          <div class="input-wrap">
-            <textarea class="input-textarea" rows="1" placeholder="Message OpenClaw…"></textarea>
+          <div class="input-container">
+            <textarea class="input-textarea" rows="1" placeholder="Melding..."></textarea>
+            <div class="input-actions">
+              <button class="input-btn mic-btn" title="Stemmeinndata">${ICON.mic}</button>
+              <button class="input-btn send-btn" title="Send" style="display:none">${ICON.send}</button>
+            </div>
           </div>
-          <button class="input-btn mic-btn" title="Voice input">${ICON.mic}</button>
-          <button class="input-btn send-btn" title="Send">${ICON.send}</button>
         </div>
       </div>
     `;
@@ -807,6 +939,10 @@ class OpenClawPanel extends HTMLElement {
     this._input.addEventListener("input", function () {
       self._input.style.height = "auto";
       self._input.style.height = Math.min(self._input.scrollHeight, 120) + "px";
+      // Toggle mic/send buttons
+      var hasText = self._input.value.trim().length > 0;
+      self._micBtn.style.display = hasText ? "none" : "flex";
+      shadow.querySelector(".send-btn").style.display = hasText ? "flex" : "none";
     });
 
     // Mic button
@@ -817,26 +953,40 @@ class OpenClawPanel extends HTMLElement {
       else self._startMic();
     });
 
-    // Tap the reconnect banner to retry immediately.
-    this._banner.addEventListener("click", function () {
-      self._reconnectAttempt = 0;
-      if (self._reconnectTimer) {
-        clearTimeout(self._reconnectTimer);
-        self._reconnectTimer = null;
-      }
-      self._connectGateway();
-    });
-
-    // Keep the input bar above the on-screen keyboard on iOS.
-    if (window.visualViewport) {
-      this._onViewportResize = function () {
-        self.style.height = window.visualViewport.height + "px";
-      };
-      window.visualViewport.addEventListener("resize", this._onViewportResize);
-      window.visualViewport.addEventListener("scroll", this._onViewportResize);
-    }
-
     this._connectGateway();
+
+    // iOS keyboard handling — WKWebView + Safari
+    var host = this;
+    var messagesEl = this._messagesEl;
+    if (window.visualViewport) {
+      var lastHeight = window.visualViewport.height;
+      var onResize = function () {
+        var vh = window.visualViewport.height;
+        host.style.height = vh + "px";
+        // Keyboard opened — scroll messages to bottom and prevent page scroll
+        if (vh < lastHeight) {
+          window.scrollTo(0, 0);
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+        lastHeight = vh;
+      };
+      window.visualViewport.addEventListener("resize", onResize);
+      window.visualViewport.addEventListener("scroll", function () {
+        // Prevent iOS from scrolling the whole page when keyboard is open
+        window.scrollTo(0, 0);
+        host.style.height = window.visualViewport.height + "px";
+      });
+      onResize();
+    } else {
+      this.style.height = window.innerHeight + "px";
+    }
+    // Prevent body scroll on iOS
+    this._input.addEventListener("focus", function () {
+      setTimeout(function () {
+        window.scrollTo(0, 0);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }, 300);
+    });
   }
 
   // ── Voice input ──
@@ -845,7 +995,7 @@ class OpenClawPanel extends HTMLElement {
     el.textContent = msg;
     el.setAttribute(
       "style",
-      "position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:20px;font-size:14px;z-index:10000;",
+      "position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--primary-text-color,#333);color:var(--lovelace-background,#fff);padding:10px 20px;border-radius:20px;font-size:14px;z-index:10000;",
     );
     (this._shadow || document.body).appendChild(el);
     setTimeout(function () {
@@ -945,6 +1095,40 @@ class OpenClawPanel extends HTMLElement {
   _closeSidebar() {
     this._sidebar.classList.remove("open");
     this._overlay.classList.remove("visible");
+  }
+
+  _showBanner(msg, type, manual) {
+    this._banner.textContent = msg;
+    this._banner.className = "conn-banner " + type;
+    if (manual) {
+      var self = this;
+      this._banner.onclick = function () {
+        self._reconnectAttempt = 0;
+        self._connectGateway();
+      };
+    } else {
+      this._banner.onclick = null;
+    }
+  }
+
+  _hideBanner() {
+    this._banner.className = "conn-banner";
+    this._banner.textContent = "";
+    this._banner.onclick = null;
+  }
+
+  _scheduleReconnect() {
+    if (this._reconnectAttempt >= this._maxReconnectAttempts) {
+      this._showBanner("Kunne ikke koble til. Trykk for a prove igjen.", "error", true);
+      return;
+    }
+    var delay = Math.min(1000 * Math.pow(2, this._reconnectAttempt), 30000);
+    this._reconnectAttempt++;
+    this._showBanner("Frakoblet — kobler til om " + Math.ceil(delay / 1000) + "s...", "warn");
+    var self = this;
+    this._reconnectTimer = setTimeout(function () {
+      self._connectGateway();
+    }, delay);
   }
 
   // ── Conversations ──
@@ -1051,8 +1235,29 @@ class OpenClawPanel extends HTMLElement {
     var msgs = this._messageCache[this._activeConvId] || [];
     var self = this;
     if (msgs.length === 0) {
+      var hour = new Date().getHours();
+      var greet =
+        hour < 5 ? "God natt" : hour < 11 ? "God morgen" : hour < 18 ? "Hei" : "God kveld";
+      var firstName =
+        self._user && self._user.name ? ", " + escapeHtml(self._user.name.split(" ")[0]) : "";
       this._messagesEl.innerHTML =
-        '<div style="text-align:center;padding:40px;color:#9e9e9e;">Start a conversation</div>';
+        '<div class="welcome">' +
+        '<div class="welcome-title">' +
+        greet +
+        firstName +
+        " 👋</div>" +
+        '<div class="welcome-sub">Hva kan jeg hjelpe deg med?</div>' +
+        '<div class="welcome-chips">' +
+        '<span class="welcome-chip">Skru av alle lys</span>' +
+        '<span class="welcome-chip">Hvilke lys er på?</span>' +
+        '<span class="welcome-chip">Temperatur inne?</span>' +
+        "</div></div>";
+      this._messagesEl.querySelectorAll(".welcome-chip").forEach(function (chip) {
+        chip.addEventListener("click", function () {
+          self._input.value = chip.textContent;
+          self._send();
+        });
+      });
       return;
     }
     msgs.forEach(function (m) {
@@ -1065,6 +1270,18 @@ class OpenClawPanel extends HTMLElement {
           ? renderMarkdown(m.content || m.text || "")
           : escapeHtml(m.content || m.text || "");
       row.appendChild(bubble);
+      if (m.ts) {
+        var time = document.createElement("div");
+        time.className = "msg-time";
+        time.textContent = new Date(m.ts).toLocaleTimeString("nb-NO", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        row.appendChild(time);
+      }
+      bubble.addEventListener("click", function () {
+        row.classList.toggle("show-time");
+      });
       self._messagesEl.appendChild(row);
     });
     this._messagesEl.scrollTop = this._messagesEl.scrollHeight;
@@ -1076,6 +1293,8 @@ class OpenClawPanel extends HTMLElement {
     if (!text || !this._wsReady) return;
     this._input.value = "";
     this._input.style.height = "auto";
+    this._micBtn.style.display = "flex";
+    this._shadow.querySelector(".send-btn").style.display = "none";
 
     // Ensure active conversation
     if (!this._activeConvId) {
@@ -1089,6 +1308,10 @@ class OpenClawPanel extends HTMLElement {
     var convId = this._activeConvId;
     if (!this._messageCache[convId]) this._messageCache[convId] = [];
 
+    // Clear the welcome / empty state before the first message renders.
+    var welcomeEl = this._messagesEl.querySelector(".welcome, .empty-state");
+    if (welcomeEl) this._messagesEl.innerHTML = "";
+
     // User message
     this._messageCache[convId].push({ role: "user", content: text });
     var um = document.createElement("div");
@@ -1096,10 +1319,11 @@ class OpenClawPanel extends HTMLElement {
     um.innerHTML = '<div class="msg-bubble">' + escapeHtml(text) + "</div>";
     this._messagesEl.appendChild(um);
 
-    // Bot placeholder
+    // Bot placeholder — thinking indicator
     var bm = document.createElement("div");
     bm.className = "msg-row assistant";
-    bm.innerHTML = '<div class="msg-bubble"><span class="thinking-text">…</span></div>';
+    bm.innerHTML =
+      '<div class="msg-bubble thinking-bubble"><div class="thinking-indicator"><span class="thinking-dot"></span><span class="thinking-text">Tenker...</span></div></div>';
     this._messagesEl.appendChild(bm);
     this._streamEl = bm.querySelector(".msg-bubble");
     this._thinkingEl = bm.querySelector(".thinking-text");
@@ -1153,7 +1377,12 @@ class OpenClawPanel extends HTMLElement {
 
   _connectGateway() {
     var self = this;
+    // Auto-detect WS URL based on how HA is being accessed
     var wsUrl = this._config.ws_url || "";
+    if (location.protocol === "http:") {
+      // Local HTTP access — use plain WS on LAN
+      wsUrl = "ws://" + location.hostname + ":18789";
+    }
     try {
       this._ws = new WebSocket(wsUrl);
     } catch (e) {
@@ -1167,18 +1396,20 @@ class OpenClawPanel extends HTMLElement {
         resolve: function (payload) {
           self._connId = payload?.server?.connId;
           self._wsReady = true;
+          self._status.textContent = "Connected";
+          self._status.className = "conn-status connected";
+          self._loadConversations();
           self._reconnectAttempt = 0;
+          self._hideBanner();
           if (self._reconnectTimer) {
             clearTimeout(self._reconnectTimer);
             self._reconnectTimer = null;
           }
-          self._hideBanner();
-          self._status.textContent = "Connected";
-          self._status.className = "conn-status connected";
-          self._loadConversations();
         },
         reject: function (err) {
-          self._status.textContent = "Auth failed";
+          self._status.textContent = "Auth feilet";
+          self._showBanner("Autentisering feilet", "error", false);
+          self._reconnectAttempt = self._maxReconnectAttempts;
         },
       };
       self._ws.send(
@@ -1187,8 +1418,8 @@ class OpenClawPanel extends HTMLElement {
           id: id,
           method: "connect",
           params: {
-            minProtocol: 3,
-            maxProtocol: 3,
+            minProtocol: 4,
+            maxProtocol: 4,
             client: { id: "openclaw-control-ui", version: "1.0", platform: "web", mode: "webchat" },
             role: "operator",
             scopes: ["operator.read", "operator.write"],
@@ -1211,56 +1442,35 @@ class OpenClawPanel extends HTMLElement {
 
     this._ws.onclose = function () {
       self._wsReady = false;
-      self._status.textContent = "Disconnected";
+      self._status.textContent = "Frakoblet";
       self._status.className = "conn-status disconnected";
-      if (!self._intentionalClose) self._scheduleReconnect();
+      self._scheduleReconnect();
     };
     this._ws.onerror = function () {
-      // onclose fires after onerror; reconnect is scheduled there.
-      self._status.textContent = "Error";
+      // onclose fires after onerror, reconnect handled there
     };
-  }
-
-  _scheduleReconnect() {
-    if (this._intentionalClose) return;
-    if (this._reconnectAttempt >= this._maxReconnectAttempts) {
-      this._showBanner("Could not reconnect. Tap to try again.", true);
-      return;
-    }
-    var delay = Math.min(1000 * Math.pow(2, this._reconnectAttempt), 30000);
-    this._reconnectAttempt++;
-    this._showBanner("Disconnected — reconnecting in " + Math.ceil(delay / 1000) + "s…", false);
-    var self = this;
-    this._reconnectTimer = setTimeout(function () {
-      self._connectGateway();
-    }, delay);
-  }
-
-  _showBanner(text, isError) {
-    if (!this._banner) return;
-    this._banner.textContent = text;
-    this._banner.className = "conn-banner visible" + (isError ? " error" : "");
-  }
-
-  _hideBanner() {
-    if (this._banner) this._banner.className = "conn-banner";
   }
 
   _handleEvent(event, payload) {
-    if (event === "homeassistant.token" && this._streamEl) {
+    if (event === "plugin.homeassistant.token" && this._streamEl) {
+      // First token — remove thinking indicator, start streaming
       if (this._thinkingEl) {
-        // First token clears the "thinking"/tool placeholder.
         this._streamEl.innerHTML = "";
         this._thinkingEl = null;
-        this._streamText = "";
       }
       this._streamText += payload.token || "";
-      this._streamEl.innerHTML = renderMarkdown(this._streamText);
-      this._messagesEl.scrollTop = this._messagesEl.scrollHeight;
-    } else if (event === "homeassistant.tool_call" && this._thinkingEl) {
-      // No tool name is available on this seam; show a generic indicator.
-      this._thinkingEl.textContent = "Running a tool…";
-    } else if (event === "homeassistant.done") {
+      if (!this._renderTimer) {
+        var self = this;
+        this._renderTimer = requestAnimationFrame(function () {
+          self._streamEl.innerHTML = renderMarkdown(self._streamText);
+          self._renderTimer = null;
+          self._messagesEl.scrollTop = self._messagesEl.scrollHeight;
+        });
+      }
+    } else if (event === "plugin.homeassistant.tool_call" && this._thinkingEl) {
+      var toolName = payload.tool || payload.name || "";
+      this._thinkingEl.textContent = TOOL_LABELS[toolName] || "Jobber...";
+    } else if (event === "plugin.homeassistant.done") {
       if (this._streamEl && this._streamText) {
         this._messageCache[this._activeConvId]?.push({
           role: "assistant",
@@ -1268,20 +1478,24 @@ class OpenClawPanel extends HTMLElement {
         });
       }
       this._streamEl = null;
+      this._thinkingEl = null;
       this._streamText = "";
-    } else if (event === "homeassistant.error" && this._streamEl) {
+      this._renderTimer = null;
+    } else if (event === "plugin.homeassistant.error" && this._streamEl) {
       this._streamEl.innerHTML = "Error: " + escapeHtml(payload.error || "unknown");
       this._streamEl = null;
-    } else if (event === "homeassistant.title") {
+      this._thinkingEl = null;
+      this._renderTimer = null;
+    } else if (event === "plugin.homeassistant.title") {
       var conv = this._conversations.find(function (c) {
         return c.id === payload.conversation_id;
       });
       if (conv) {
-        conv.title = payload.title;
+        conv.title = formatChatTitle(payload.title, conv.updatedAt);
         this._renderConvList();
       }
       if (this._activeConvId === payload.conversation_id)
-        this._topTitle.textContent = payload.title;
+        this._topTitle.textContent = formatChatTitle(payload.title, conv && conv.updatedAt);
     }
   }
 
@@ -1292,26 +1506,27 @@ class OpenClawPanel extends HTMLElement {
         user_id: this._user.id,
       });
       this._conversations = (res?.conversations || []).map(function (c) {
-        return { id: c.id, title: c.title || "Chat", updatedAt: c.updated_at };
+        return {
+          id: c.id,
+          title: formatChatTitle(c.title || "Chat", c.updated_at),
+          updatedAt: c.updated_at,
+        };
       });
       this._renderConvList();
-      if (this._conversations.length > 0 && !this._activeConvId) {
-        this._setActiveConv(this._conversations[0].id);
+      // Open a fresh chat by default; past chats stay available in the sidebar.
+      if (!this._activeConvId) {
+        this._topTitle.textContent = "New Chat";
+        this._renderMessages();
       }
     } catch (e) {}
   }
 
   disconnectedCallback() {
-    this._intentionalClose = true;
+    if (this._ws) this._ws.close();
     if (this._reconnectTimer) {
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = null;
     }
-    if (this._onViewportResize && window.visualViewport) {
-      window.visualViewport.removeEventListener("resize", this._onViewportResize);
-      window.visualViewport.removeEventListener("scroll", this._onViewportResize);
-    }
-    if (this._ws) this._ws.close();
   }
 }
 customElements.define("openclaw-panel", OpenClawPanel);
