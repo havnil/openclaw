@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { HaDispatchFn } from "./channel.js";
+import type { HaDispatchFn, HaTranscribeFn } from "./channel.js";
 import type { ConversationStore } from "./conversations.js";
 import type { HaUserIdentity, StoredMessage } from "./protocol.js";
 import { StreamHub } from "./stream-hub.js";
@@ -8,6 +8,7 @@ export type HaHttpApiDeps = {
   hub: StreamHub;
   getStore: () => ConversationStore | null;
   getDispatch: () => HaDispatchFn | null;
+  getTranscribe: () => HaTranscribeFn | null;
   getSecret: () => string;
   getCfg: () => unknown;
   resolveUser: (body: Record<string, unknown>) => HaUserIdentity;
@@ -181,6 +182,123 @@ async function handleSend(
   })();
 }
 
+async function handleConversations(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: HaHttpApiDeps,
+): Promise<void> {
+  const body = await readBody(req);
+  const secret = deps.getSecret();
+  const headerSecret = req.headers["x-openclaw-secret"];
+
+  if (!authOk(secret, headerSecret, body.secret)) {
+    json(res, 401, { error: "Unauthorized" });
+    return;
+  }
+
+  const store = deps.getStore();
+  if (!store) {
+    json(res, 503, { error: "Channel not started" });
+    return;
+  }
+
+  const action = typeof body.action === "string" ? body.action : "";
+  const userId = typeof body.user_id === "string" ? body.user_id : "";
+  if (!userId) {
+    json(res, 400, { error: "Missing user_id" });
+    return;
+  }
+
+  switch (action) {
+    case "list": {
+      const list = await store.list(userId);
+      json(res, 200, {
+        conversations: list.map((c) => ({ id: c.id, title: c.title, updated_at: c.updated_at })),
+      });
+      break;
+    }
+    case "create": {
+      const conv = await store.create(userId);
+      json(res, 200, { id: conv.id, title: conv.title });
+      break;
+    }
+    case "load": {
+      const convId = typeof body.conversation_id === "string" ? body.conversation_id : "";
+      const conv = await store.load(convId, userId);
+      if (!conv) {
+        json(res, 404, { error: "Conversation not found" });
+        break;
+      }
+      json(res, 200, {
+        conversation_id: conv.id,
+        title: conv.title,
+        messages: conv.messages.map((m) => ({
+          id: m.timestamp,
+          role: m.role,
+          content: m.text,
+          ts: m.timestamp,
+        })),
+      });
+      break;
+    }
+    case "delete": {
+      const convId = typeof body.conversation_id === "string" ? body.conversation_id : "";
+      await store.delete(convId, userId);
+      json(res, 200, { deleted: true });
+      break;
+    }
+    case "rename": {
+      const convId = typeof body.conversation_id === "string" ? body.conversation_id : "";
+      const title = typeof body.title === "string" ? body.title : "";
+      await store.rename(convId, userId, title);
+      json(res, 200, { renamed: true });
+      break;
+    }
+    default:
+      json(res, 400, { error: `Unknown action: ${action}` });
+  }
+}
+
+async function handleTranscribe(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: HaHttpApiDeps,
+): Promise<void> {
+  const body = await readBody(req);
+  const secret = deps.getSecret();
+  const headerSecret = req.headers["x-openclaw-secret"];
+
+  if (!authOk(secret, headerSecret, body.secret)) {
+    json(res, 401, { error: "Unauthorized" });
+    return;
+  }
+
+  const transcribe = deps.getTranscribe();
+  if (!transcribe) {
+    json(res, 503, { error: "Transcription not available" });
+    return;
+  }
+
+  const audioBase64 = typeof body.audio === "string" ? body.audio : "";
+  const mime = typeof body.mime === "string" ? body.mime : "audio/webm";
+
+  if (!audioBase64) {
+    json(res, 400, { error: "No audio data" });
+    return;
+  }
+
+  try {
+    const audioData = Buffer.from(audioBase64, "base64");
+    const result = await transcribe({ audioData, mime });
+    const text = result.text ?? "";
+    // Only flag as gibberish if very short AND no real letters
+    const isGibberish = text.length > 0 && text.length < 2;
+    json(res, 200, { text: isGibberish ? "" : text, retry: isGibberish || !text });
+  } catch (err) {
+    json(res, 500, { error: String(err) });
+  }
+}
+
 const BASE = "/api/homeassistant";
 
 export function createHaHttpApi(deps: HaHttpApiDeps): HaHttpApi {
@@ -208,6 +326,16 @@ export function createHaHttpApi(deps: HaHttpApiDeps): HaHttpApi {
 
     if (req.method === "POST" && sub === "/send") {
       await handleSend(req, res, deps);
+      return true;
+    }
+
+    if (req.method === "POST" && sub === "/conversations") {
+      await handleConversations(req, res, deps);
+      return true;
+    }
+
+    if (req.method === "POST" && sub === "/transcribe") {
+      await handleTranscribe(req, res, deps);
       return true;
     }
 

@@ -46,6 +46,7 @@ describe("HA HTTP API", () => {
     p.onToken("i");
     p.onDone("hei");
   });
+  const transcribeFake = vi.fn(async (_p: any) => ({ text: "hello" }));
   const mk = () =>
     createHaHttpApi({
       hub: new StreamHub(),
@@ -54,6 +55,7 @@ describe("HA HTTP API", () => {
       getSecret: () => "s",
       getCfg: () => ({}),
       resolveUser: () => ({ user_id: "havnil", user_name: "Havard", is_admin: true }) as any,
+      getTranscribe: () => transcribeFake as any,
     });
 
   it("rejects a wrong secret with 401", async () => {
@@ -74,5 +76,44 @@ describe("HA HTTP API", () => {
     );
     await vi.waitFor(() => expect(events.at(-1)).toEqual({ type: "done", full_text: "hei" }));
     expect(events.map((e) => e.type)).toEqual(["token", "token", "done"]);
+  });
+
+  it("POST /conversations list returns empty conversations array", async () => {
+    store.list.mockResolvedValueOnce([]);
+    const api = mk();
+    const { res, chunks } = mkRes();
+    await api.handle(
+      mkReq("POST", "/api/homeassistant/conversations", { action: "list", user_id: "u" }),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(chunks.join(""));
+    expect(body).toEqual({ conversations: [] });
+  });
+
+  it("POST /conversations create returns an id", async () => {
+    store.create.mockResolvedValueOnce({ id: "c2", title: "New conversation" });
+    const api = mk();
+    const { res, chunks } = mkRes();
+    await api.handle(
+      mkReq("POST", "/api/homeassistant/conversations", { action: "create", user_id: "u" }),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(chunks.join(""));
+    expect(body).toHaveProperty("id");
+  });
+
+  it("POST /transcribe returns text from transcribe fn", async () => {
+    const audio = Buffer.from("fakeaudio").toString("base64");
+    const api = mk();
+    const { res, chunks } = mkRes();
+    await api.handle(
+      mkReq("POST", "/api/homeassistant/transcribe", { audio, mime: "audio/wav" }),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(chunks.join(""));
+    expect(body).toEqual({ text: "hello", retry: false });
   });
 });
