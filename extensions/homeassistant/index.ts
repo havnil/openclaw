@@ -1,13 +1,21 @@
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import {
-  createReplyDispatcher,
-  dispatchInboundMessage,
-  finalizeInboundContext,
-} from "openclaw/plugin-sdk/reply-runtime";
+  defineBundledChannelEntry,
+  type OpenClawPluginApi,
+} from "openclaw/plugin-sdk/channel-entry-contract";
 import { Type } from "typebox";
-import { homeAssistantPlugin, setHaDispatch, setHaTranscribe } from "./src/channel.js";
-import { handleConversations, createSendHandler, handleTranscribe } from "./src/gateway-methods.js";
+import {
+  getConversationStore,
+  getHaDispatch,
+  getHaTranscribe,
+  isAdmin,
+  resolveAccount,
+  setHaDispatch,
+  setHaTranscribe,
+} from "./src/channel.js";
+import { runHaDispatch } from "./src/dispatch.js";
+import { createHaHttpApi } from "./src/http-api.js";
+import type { HaUserIdentity } from "./src/protocol.js";
+import { StreamHub } from "./src/stream-hub.js";
 
 export { homeAssistantPlugin } from "./src/channel.js";
 
@@ -41,264 +49,223 @@ function haClient(config: HaConfig) {
   return { request };
 }
 
-export default defineChannelPluginEntry({
-  id: "homeassistant",
-  name: "Home Assistant",
-  description:
-    "Home Assistant channel and tools — chat interface with WebSocket streaming and REST API control",
-  plugin: homeAssistantPlugin,
+/**
+ * Resolve a user identity from a request body.
+ * Auth is already verified (secret checked by handleSend/handleConversations/handleTranscribe)
+ * before this is called; we just map the body fields to an HaUserIdentity.
+ */
+function resolveUser(body: Record<string, unknown>, cfg: unknown): HaUserIdentity {
+  const userId = typeof body.user_id === "string" ? body.user_id : "anonymous";
+  const userName = typeof body.user_name === "string" ? body.user_name : userId;
+  const account = resolveAccount(
+    cfg as import("openclaw/plugin-sdk/account-resolution").OpenClawConfig,
+  );
+  return {
+    user_id: userId,
+    user_name: userName,
+    is_admin: isAdmin(userId, account.admins),
+  };
+}
 
-  registerFull(api) {
-    const cfg = api.pluginConfig as unknown as HaConfig;
-    const ha = haClient(cfg);
+function registerFull(api: OpenClawPluginApi): void {
+  const cfg = api.pluginConfig as unknown as HaConfig;
+  const ha = haClient(cfg);
 
-    // ── Register gateway methods for HA panel communication ─────────────────
-    api.registerGatewayMethod(
-      "homeassistant.conversations",
-      handleConversations as Parameters<typeof api.registerGatewayMethod>[1],
-      { scope: "operator.write" },
-    );
-    api.registerGatewayMethod(
-      "homeassistant.send",
-      createSendHandler(() => api.config) as Parameters<typeof api.registerGatewayMethod>[1],
-      { scope: "operator.write" },
-    );
-    api.registerGatewayMethod(
-      "homeassistant.transcribe",
-      handleTranscribe as Parameters<typeof api.registerGatewayMethod>[1],
-      { scope: "operator.write" },
-    );
+  // ── Wire in-process AI dispatch ──────────────────────────────────────────
+  setHaDispatch(runHaDispatch);
 
-    // ── Wire audio transcription via OC's media understanding pipeline ─────
-    setHaTranscribe(async ({ audioData, mime }) => {
-      const { writeFile, unlink, stat } = await import("node:fs/promises");
-      const { join } = await import("node:path");
-      const { randomUUID } = await import("node:crypto");
-      const ext = mime.includes("webm")
-        ? "webm"
-        : mime.includes("mp4")
-          ? "m4a"
-          : mime.includes("wav")
-            ? "wav"
-            : mime.includes("aac")
-              ? "aac"
-              : "ogg";
-      const tmpPath = join(
-        (await import("node:os")).tmpdir(),
-        `openclaw-ha-audio-${randomUUID()}.${ext}`,
+  // ── Wire audio transcription via OC's media understanding pipeline ─────
+  setHaTranscribe(async ({ audioData, mime }) => {
+    const { writeFile, unlink, stat } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { randomUUID } = await import("node:crypto");
+    const ext = mime.includes("webm")
+      ? "webm"
+      : mime.includes("mp4")
+        ? "m4a"
+        : mime.includes("wav")
+          ? "wav"
+          : mime.includes("aac")
+            ? "aac"
+            : "ogg";
+    const tmpPath = join(
+      (await import("node:os")).tmpdir(),
+      `openclaw-ha-audio-${randomUUID()}.${ext}`,
+    );
+    try {
+      await writeFile(tmpPath, audioData);
+      const fileStats = await stat(tmpPath);
+      console.log(
+        `[ha:transcribe] wrote ${fileStats.size} bytes to ${tmpPath} (ext=${ext}, mime=${mime})`,
       );
-      try {
-        await writeFile(tmpPath, audioData);
-        const fileStats = await stat(tmpPath);
-        console.log(
-          `[ha:transcribe] wrote ${fileStats.size} bytes to ${tmpPath} (ext=${ext}, mime=${mime})`,
-        );
-        const result = await api.runtime.mediaUnderstanding.transcribeAudioFile({
-          filePath: tmpPath,
-          cfg: api.config,
-          mime,
-        });
-        console.log(`[ha:transcribe] OC result: text="${result.text}" (${typeof result.text})`);
-        return { text: result.text?.trim() || undefined };
-      } catch (err) {
-        console.error(`[ha:transcribe] ERROR:`, err);
-        throw err;
-      } finally {
-        // Keep file for debugging - delete after 60s
-        setTimeout(() => unlink(tmpPath).catch(() => {}), 60000);
-      }
-    });
+      const result = await api.runtime.mediaUnderstanding.transcribeAudioFile({
+        filePath: tmpPath,
+        cfg: api.config,
+        mime,
+      });
+      console.log(`[ha:transcribe] OC result: text="${result.text}" (${typeof result.text})`);
+      return { text: result.text?.trim() || undefined };
+    } catch (err) {
+      console.error(`[ha:transcribe] ERROR:`, err);
+      throw err;
+    } finally {
+      // Keep file for debugging - delete after 60s
+      setTimeout(() => unlink(tmpPath).catch(() => {}), 60000);
+    }
+  });
 
-    // ── Wire the AI dispatch for the WebSocket channel ─────────────────────
-    setHaDispatch(
-      async ({ cfg: fullCfg, user, text, onToken, onToolActivity, onDone, onError }) => {
-        const agentId = user.is_admin ? "main" : "home";
+  // ── Serve panel via HTTP+SSE ─────────────────────────────────────────────
+  const hub = new StreamHub();
+  const haApi = createHaHttpApi({
+    hub,
+    getStore: () => getConversationStore(),
+    getDispatch: () => getHaDispatch(),
+    getSecret: () => resolveAccount(api.config as never).secret,
+    getCfg: () => api.config,
+    // getHaTranscribe returns the live function wired above via setHaTranscribe
+    getTranscribe: () => getHaTranscribe(),
+    resolveUser: (body) => resolveUser(body, api.config),
+  });
 
-        const ctxPayload = finalizeInboundContext({
-          Body: text,
-          BodyForAgent: text,
-          BodyForCommands: text,
-          RawBody: text,
-          From: `ha:${user.user_id}`,
-          To: `ha:${user.user_id}`,
-          SessionKey: `ha:${user.user_id}`,
-          SenderName: user.user_name,
-          SenderId: user.user_id,
-          Provider: "homeassistant" as const,
-          Surface: "homeassistant" as const,
-          OriginatingChannel: "homeassistant" as const,
-          OriginatingTo: `ha:${user.user_id}`,
-          CommandAuthorized: user.is_admin,
-        });
+  // Plugin auth: the handler performs its own secret check inside haApi.
+  api.registerHttpRoute({
+    path: "/api/homeassistant",
+    match: "prefix",
+    auth: "plugin",
+    handler: (req, res) => haApi.handle(req, res),
+  });
 
-        const replyPipeline = createChannelReplyPipeline({
-          cfg: fullCfg,
-          agentId,
-          channel: "homeassistant",
-        });
+  // ── ha_get_states ─────────────────────────────────────────────────────────
+  api.registerTool({
+    name: "ha_get_states",
+    label: "Get States",
+    description:
+      "Get the current state of one or all Home Assistant entities. " +
+      "Pass an entity_id to get a single entity, or omit it to get all states.",
+    parameters: Type.Object({
+      entity_id: Type.Optional(Type.String({ description: "Entity ID, e.g. light.living_room" })),
+    }),
+    async execute(_id, params) {
+      const { entity_id } = params as { entity_id?: string };
+      const path = entity_id ? `/api/states/${entity_id}` : "/api/states";
+      const data = await ha.request("GET", path);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+        details: {},
+      };
+    },
+  });
 
-        const dispatcher = createReplyDispatcher({
-          ...replyPipeline,
-          deliver: async (payload, info) => {
-            // Tool results aren't shown in the panel, but signal generic tool
-            // activity so the UI can show a "running a tool" indicator. The reply
-            // dispatcher seam does not expose the tool name here.
-            if (info.kind === "tool") {
-              onToolActivity?.();
-              return;
-            }
-            // Only send block/final replies to the panel.
-            if (payload.text) {
-              onDone(payload.text);
-            }
-          },
-          onError: (err) => {
-            onError(String(err));
-          },
-        });
+  // ── ha_call_service ───────────────────────────────────────────────────────
+  api.registerTool({
+    name: "ha_call_service",
+    label: "Call Service",
+    description:
+      "Call a Home Assistant service. Examples: " +
+      "domain=light service=turn_on, domain=switch service=toggle, " +
+      "domain=climate service=set_temperature. " +
+      "Pass service_data for extra fields (brightness, temperature, etc).",
+    parameters: Type.Object({
+      domain: Type.String({ description: "Service domain, e.g. light, switch, climate" }),
+      service: Type.String({ description: "Service name, e.g. turn_on, turn_off, toggle" }),
+      service_data: Type.Optional(
+        Type.Record(Type.String(), Type.Unknown(), {
+          description: "Extra fields, e.g. { entity_id: 'light.kitchen', brightness: 128 }",
+        }),
+      ),
+    }),
+    async execute(_id, params) {
+      const { domain, service, service_data } = params as {
+        domain: string;
+        service: string;
+        service_data?: Record<string, unknown>;
+      };
+      const data = await ha.request(
+        "POST",
+        `/api/services/${domain}/${service}`,
+        service_data ?? {},
+      );
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+        details: {},
+      };
+    },
+  });
 
-        await dispatchInboundMessage({
-          ctx: ctxPayload,
-          cfg: fullCfg,
-          dispatcher,
-          replyOptions: {
-            onPartialReply: (() => {
-              let lastSent = "";
-              return async (payload: { text?: string }) => {
-                if (payload.text && payload.text.length > lastSent.length) {
-                  const delta = payload.text.slice(lastSent.length);
-                  lastSent = payload.text;
-                  onToken(delta);
-                }
-              };
-            })(),
-          },
-        });
-      },
-    );
-
-    // ── ha_get_states ─────────────────────────────────────────────────────────
-    api.registerTool({
-      name: "ha_get_states",
-      label: "Get States",
-      description:
-        "Get the current state of one or all Home Assistant entities. " +
-        "Pass an entity_id to get a single entity, or omit it to get all states.",
+  // ── ha_get_history ────────────────────────────────────────────────────────
+  api.registerTool(
+    {
+      name: "ha_get_history",
+      label: "Get History",
+      description: "Get state change history for one or more entities over a time range.",
       parameters: Type.Object({
-        entity_id: Type.Optional(Type.String({ description: "Entity ID, e.g. light.living_room" })),
-      }),
-      async execute(_id, params) {
-        const { entity_id } = params as { entity_id?: string };
-        const path = entity_id ? `/api/states/${entity_id}` : "/api/states";
-        const data = await ha.request("GET", path);
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-          details: {},
-        };
-      },
-    });
-
-    // ── ha_call_service ───────────────────────────────────────────────────────
-    api.registerTool({
-      name: "ha_call_service",
-      label: "Call Service",
-      description:
-        "Call a Home Assistant service. Examples: " +
-        "domain=light service=turn_on, domain=switch service=toggle, " +
-        "domain=climate service=set_temperature. " +
-        "Pass service_data for extra fields (brightness, temperature, etc).",
-      parameters: Type.Object({
-        domain: Type.String({ description: "Service domain, e.g. light, switch, climate" }),
-        service: Type.String({ description: "Service name, e.g. turn_on, turn_off, toggle" }),
-        service_data: Type.Optional(
-          Type.Record(Type.String(), Type.Unknown(), {
-            description: "Extra fields, e.g. { entity_id: 'light.kitchen', brightness: 128 }",
+        entity_ids: Type.Array(Type.String(), {
+          description: "List of entity IDs to query",
+        }),
+        hours_back: Type.Optional(
+          Type.Number({
+            description: "How many hours of history to fetch (default 24)",
+            default: 24,
           }),
         ),
       }),
       async execute(_id, params) {
-        const { domain, service, service_data } = params as {
-          domain: string;
-          service: string;
-          service_data?: Record<string, unknown>;
+        const { entity_ids, hours_back } = params as {
+          entity_ids: string[];
+          hours_back?: number;
         };
+        const hours = hours_back ?? 24;
+        const start = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+        const ids = entity_ids.join(",");
         const data = await ha.request(
-          "POST",
-          `/api/services/${domain}/${service}`,
-          service_data ?? {},
+          "GET",
+          `/api/history/period/${start}?filter_entity_id=${ids}&minimal_response`,
         );
         return {
           content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
           details: {},
         };
       },
-    });
+    },
+    { optional: true },
+  );
 
-    // ── ha_get_history ────────────────────────────────────────────────────────
-    api.registerTool(
-      {
-        name: "ha_get_history",
-        label: "Get History",
-        description: "Get state change history for one or more entities over a time range.",
-        parameters: Type.Object({
-          entity_ids: Type.Array(Type.String(), {
-            description: "List of entity IDs to query",
+  // ── ha_fire_event ─────────────────────────────────────────────────────────
+  api.registerTool(
+    {
+      name: "ha_fire_event",
+      label: "Fire Event",
+      description: "Fire a custom Home Assistant event.",
+      parameters: Type.Object({
+        event_type: Type.String({ description: "Event type to fire" }),
+        event_data: Type.Optional(
+          Type.Record(Type.String(), Type.Unknown(), {
+            description: "Payload to attach to the event",
           }),
-          hours_back: Type.Optional(
-            Type.Number({
-              description: "How many hours of history to fetch (default 24)",
-              default: 24,
-            }),
-          ),
-        }),
-        async execute(_id, params) {
-          const { entity_ids, hours_back } = params as {
-            entity_ids: string[];
-            hours_back?: number;
-          };
-          const hours = hours_back ?? 24;
-          const start = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-          const ids = entity_ids.join(",");
-          const data = await ha.request(
-            "GET",
-            `/api/history/period/${start}?filter_entity_id=${ids}&minimal_response`,
-          );
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-            details: {},
-          };
-        },
+        ),
+      }),
+      async execute(_id, params) {
+        const { event_type, event_data } = params as {
+          event_type: string;
+          event_data?: Record<string, unknown>;
+        };
+        const data = await ha.request("POST", `/api/events/${event_type}`, event_data ?? {});
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+          details: {},
+        };
       },
-      { optional: true },
-    );
+    },
+    { optional: true },
+  );
+}
 
-    // ── ha_fire_event ─────────────────────────────────────────────────────────
-    api.registerTool(
-      {
-        name: "ha_fire_event",
-        label: "Fire Event",
-        description: "Fire a custom Home Assistant event.",
-        parameters: Type.Object({
-          event_type: Type.String({ description: "Event type to fire" }),
-          event_data: Type.Optional(
-            Type.Record(Type.String(), Type.Unknown(), {
-              description: "Payload to attach to the event",
-            }),
-          ),
-        }),
-        async execute(_id, params) {
-          const { event_type, event_data } = params as {
-            event_type: string;
-            event_data?: Record<string, unknown>;
-          };
-          const data = await ha.request("POST", `/api/events/${event_type}`, event_data ?? {});
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-            details: {},
-          };
-        },
-      },
-      { optional: true },
-    );
-  },
+export default defineBundledChannelEntry({
+  id: "homeassistant",
+  name: "Home Assistant",
+  description:
+    "Home Assistant channel and tools — chat interface with WebSocket streaming and REST API control",
+  importMetaUrl: import.meta.url,
+  plugin: { specifier: "./src/channel.js", exportName: "homeAssistantPlugin" },
+  registerFull,
 });

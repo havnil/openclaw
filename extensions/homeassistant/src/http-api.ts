@@ -175,6 +175,14 @@ async function handleSend(
         timestamp: new Date().toISOString(),
       };
       await store.appendMessage(convId, user.user_id, assistantMessage);
+
+      // Auto-title on first message: if title is still the default, derive one from the user text.
+      const conv = await store.load(convId, user.user_id);
+      if (conv && conv.title === "New conversation") {
+        const title = generateTitle(text);
+        await store.rename(convId, user.user_id, title);
+        deps.hub.publish(convId, { type: "title", title });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       deps.hub.publish(convId, { type: "error", error: message });
@@ -297,6 +305,16 @@ async function handleTranscribe(
   } catch (err) {
     json(res, 500, { error: String(err) });
   }
+}
+
+function generateTitle(text: string): string {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  if (cleaned.length <= 40) {
+    return cleaned;
+  }
+  const truncated = cleaned.slice(0, 40);
+  const lastSpace = truncated.lastIndexOf(" ");
+  return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + "...";
 }
 
 const BASE = "/api/homeassistant";

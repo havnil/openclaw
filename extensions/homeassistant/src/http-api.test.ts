@@ -104,6 +104,21 @@ describe("HA HTTP API", () => {
     expect(body).toHaveProperty("id");
   });
 
+  it("publishes a title event when conversation has default title", async () => {
+    // store.load returns "New conversation" title by default — triggers auto-title
+    const api = mk();
+    const events: any[] = [];
+    api.hub.subscribe("c1", (e) => events.push(e));
+    const { res } = mkRes();
+    await api.handle(
+      mkReq("POST", "/api/homeassistant/send", { conversation_id: "c1", text: "lights on" }),
+      res,
+    );
+    await vi.waitFor(() => expect(events.find((e) => e.type === "title")).toBeDefined());
+    const titleEvent = events.find((e) => e.type === "title");
+    expect(titleEvent).toMatchObject({ type: "title", title: "lights on" });
+  });
+
   it("POST /transcribe returns text from transcribe fn", async () => {
     const audio = Buffer.from("fakeaudio").toString("base64");
     const api = mk();
