@@ -38,7 +38,9 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
   }
   const raw = Buffer.concat(chunks).toString("utf-8");
-  if (!raw) return {};
+  if (!raw) {
+    return {};
+  }
   try {
     const parsed = JSON.parse(raw);
     if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -56,8 +58,12 @@ function authOk(
   bodyValue: unknown,
 ): boolean {
   const fromHeader = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-  if (typeof fromHeader === "string" && fromHeader === secret) return true;
-  if (typeof bodyValue === "string" && bodyValue === secret) return true;
+  if (typeof fromHeader === "string" && fromHeader === secret) {
+    return true;
+  }
+  if (typeof bodyValue === "string" && bodyValue === secret) {
+    return true;
+  }
   return false;
 }
 
@@ -326,7 +332,9 @@ export function createHaHttpApi(deps: HaHttpApiDeps): HaHttpApi {
     const url = req.url ?? "";
     const path = url.split("?")[0];
 
-    if (!path.startsWith(BASE)) return false;
+    if (!path.startsWith(BASE)) {
+      return false;
+    }
 
     const sub = path.slice(BASE.length);
 

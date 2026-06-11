@@ -18,14 +18,23 @@ export class StreamHub {
     set.add(listener);
     return () => {
       const s = this.subs.get(conversationId);
-      if (!s) return;
+      if (!s) {
+        return;
+      }
       s.delete(listener);
-      if (s.size === 0) this.subs.delete(conversationId);
+      if (s.size === 0) {
+        this.subs.delete(conversationId);
+      }
     };
   }
   publish(conversationId: string, event: HaStreamEvent): void {
     const set = this.subs.get(conversationId);
-    if (!set) return;
-    for (const l of [...set]) l(event);
+    if (!set) {
+      return;
+    }
+    const snapshot = new Set(set);
+    for (const l of snapshot) {
+      l(event);
+    }
   }
 }

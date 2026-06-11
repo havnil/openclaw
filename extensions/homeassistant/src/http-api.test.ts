@@ -26,7 +26,9 @@ function mkRes() {
     return true;
   };
   (res as any).end = (c?: string) => {
-    if (c) chunks.push(c);
+    if (c) {
+      chunks.push(c);
+    }
     return res;
   };
   return { res, chunks };

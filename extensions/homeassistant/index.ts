@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import {
   defineBundledChannelEntry,
   type OpenClawPluginApi,
@@ -57,9 +58,7 @@ function haClient(config: HaConfig) {
 function resolveUser(body: Record<string, unknown>, cfg: unknown): HaUserIdentity {
   const userId = typeof body.user_id === "string" ? body.user_id : "anonymous";
   const userName = typeof body.user_name === "string" ? body.user_name : userId;
-  const account = resolveAccount(
-    cfg as import("openclaw/plugin-sdk/account-resolution").OpenClawConfig,
-  );
+  const account = resolveAccount(cfg as OpenClawConfig);
   return {
     user_id: userId,
     user_name: userName,
@@ -120,7 +119,7 @@ function registerFull(api: OpenClawPluginApi): void {
     hub,
     getStore: () => getConversationStore(),
     getDispatch: () => getHaDispatch(),
-    getSecret: () => resolveAccount(api.config as never).secret,
+    getSecret: () => resolveAccount(api.config as OpenClawConfig).secret,
     getCfg: () => api.config,
     // getHaTranscribe returns the live function wired above via setHaTranscribe
     getTranscribe: () => getHaTranscribe(),
