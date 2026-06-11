@@ -31,7 +31,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         webcomponent_name="openclaw-panel",
         sidebar_title="OpenClaw",
         sidebar_icon="mdi:chat",
-        module_url="/openclaw/frontend/openclaw-panel.js",
+        module_url="/openclaw/frontend/openclaw-panel.js?v=6",
         config={"ws_url": ws_url, "secret": secret},
         require_admin=False,
     )

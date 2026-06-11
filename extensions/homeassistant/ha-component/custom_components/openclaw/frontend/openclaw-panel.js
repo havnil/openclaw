@@ -852,18 +852,22 @@ class OpenClawPanel extends HTMLElement {
     this._done = true;
     this._config = this._panel.config || {};
     this._user = this._hass.user || {};
-    this._wsReady = false;
-    this._pending = {};
-    this._connId = null;
     this._streamEl = null;
     this._conversations = [];
     this._activeConvId = null;
     this._messageCache = {};
     this._thinkingEl = null;
     this._renderTimer = null;
-    this._reconnectAttempt = 0;
-    this._maxReconnectAttempts = 20;
-    this._reconnectTimer = null;
+    this._es = null;
+    this._esConv = null;
+
+    // Derive HTTP base from ws_url when api_url is not set
+    this._base = (this._config.api_url || this._config.ws_url.replace(/^ws/, "http")).replace(
+      /\/$/,
+      "",
+    );
+    this._secret = this._config.secret;
+    this._apiRoot = this._base + "/api/homeassistant";
 
     var shadow = this.attachShadow({ mode: "open" });
     var style = document.createElement("style");
@@ -953,7 +957,8 @@ class OpenClawPanel extends HTMLElement {
       else self._startMic();
     });
 
-    this._connectGateway();
+    this._setConn("connecting");
+    this._loadConversations();
 
     // iOS keyboard handling — WKWebView + Safari
     var host = this;
@@ -1069,7 +1074,7 @@ class OpenClawPanel extends HTMLElement {
     var base64 = btoa(binary);
 
     try {
-      var res = await this._gwRequest("homeassistant.transcribe", {
+      var res = await this._gwRequest("/transcribe", {
         audio: base64,
         mime: mime,
       });
@@ -1097,18 +1102,10 @@ class OpenClawPanel extends HTMLElement {
     this._overlay.classList.remove("visible");
   }
 
-  _showBanner(msg, type, manual) {
+  _showBanner(msg, type) {
     this._banner.textContent = msg;
     this._banner.className = "conn-banner " + type;
-    if (manual) {
-      var self = this;
-      this._banner.onclick = function () {
-        self._reconnectAttempt = 0;
-        self._connectGateway();
-      };
-    } else {
-      this._banner.onclick = null;
-    }
+    this._banner.onclick = null;
   }
 
   _hideBanner() {
@@ -1117,24 +1114,28 @@ class OpenClawPanel extends HTMLElement {
     this._banner.onclick = null;
   }
 
-  _scheduleReconnect() {
-    if (this._reconnectAttempt >= this._maxReconnectAttempts) {
-      this._showBanner("Kunne ikke koble til. Trykk for a prove igjen.", "error", true);
-      return;
+  // Update the connection status pill and banner based on SSE state.
+  _setConn(state) {
+    var labels = {
+      connected: "Connected",
+      connecting: "Connecting...",
+      disconnected: "Disconnected",
+    };
+    this._status.textContent = labels[state] || state;
+    this._status.className = "conn-status " + state;
+    if (state === "connected") {
+      this._hideBanner();
+    } else if (state === "connecting") {
+      this._showBanner("Kobler til...", "warn");
+    } else {
+      this._showBanner("Frakoblet — EventSource kobler til automatisk...", "warn");
     }
-    var delay = Math.min(1000 * Math.pow(2, this._reconnectAttempt), 30000);
-    this._reconnectAttempt++;
-    this._showBanner("Frakoblet — kobler til om " + Math.ceil(delay / 1000) + "s...", "warn");
-    var self = this;
-    this._reconnectTimer = setTimeout(function () {
-      self._connectGateway();
-    }, delay);
   }
 
   // ── Conversations ──
   async _newConversation() {
     try {
-      var res = await this._gwRequest("homeassistant.conversations", {
+      var res = await this._gwRequest("/conversations", {
         action: "create",
         user_id: this._user.id,
       });
@@ -1162,6 +1163,7 @@ class OpenClawPanel extends HTMLElement {
   _setActiveConv(id) {
     this._activeConvId = id;
     this._streamEl = null;
+    this._ensureStream(id);
     var conv = this._conversations.find(function (c) {
       return c.id === id;
     });
@@ -1175,7 +1177,7 @@ class OpenClawPanel extends HTMLElement {
 
   async _loadHistory(id) {
     try {
-      var res = await this._gwRequest("homeassistant.conversations", {
+      var res = await this._gwRequest("/conversations", {
         action: "load",
         user_id: this._user.id,
         conversation_id: id,
@@ -1198,7 +1200,7 @@ class OpenClawPanel extends HTMLElement {
       else this._renderMessages();
     }
     this._renderConvList();
-    this._gwRequest("homeassistant.conversations", {
+    this._gwRequest("/conversations", {
       action: "delete",
       user_id: this._user.id,
       conversation_id: id,
@@ -1290,7 +1292,7 @@ class OpenClawPanel extends HTMLElement {
   // ── Send ──
   _send() {
     var text = this._input.value.trim();
-    if (!text || !this._wsReady) return;
+    if (!text) return;
     this._input.value = "";
     this._input.style.height = "auto";
     this._micBtn.style.display = "flex";
@@ -1330,182 +1332,157 @@ class OpenClawPanel extends HTMLElement {
     this._streamText = "";
     this._messagesEl.scrollTop = this._messagesEl.scrollHeight;
 
-    // Send
-    this._gwRequest("homeassistant.send", {
-      secret: this._config.secret,
+    // Ensure SSE stream is open for this conversation before sending
+    this._ensureStream(convId);
+
+    // POST /send — returns immediately; reply arrives via SSE
+    var self = this;
+    this._gwRequest("/send", {
+      conversation_id: convId,
+      text: text,
       user_id: this._user.id,
       user_name: this._user.name,
-      conversation_id: convId,
-      content: text,
-      conn_id: this._connId,
     })
-      .then((res) => {
-        if (res?.new_conversation && res?.conversation_id) {
-          this._activeConvId = res.conversation_id;
-          this._messageCache[res.conversation_id] = this._messageCache[convId] || [];
-          this._conversations.unshift({
-            id: res.conversation_id,
+      .then(function (res) {
+        if (res && res.new_conversation && res.conversation_id) {
+          // Server created a new conversation — switch to it
+          var newId = res.conversation_id;
+          self._messageCache[newId] = self._messageCache[convId] || [];
+          self._activeConvId = newId;
+          self._conversations.unshift({
+            id: newId,
             title: "New Chat",
             updatedAt: new Date().toISOString(),
           });
-          this._renderConvList();
+          self._renderConvList();
+          // Re-open SSE stream for the new conversation id
+          self._ensureStream(newId);
         }
       })
-      .catch((err) => {
-        if (this._streamEl) {
-          this._streamEl.innerHTML = "Error: " + escapeHtml(err.message);
-          this._streamEl = null;
+      .catch(function (err) {
+        if (self._streamEl) {
+          self._streamEl.innerHTML = "Error: " + escapeHtml(err.message);
+          self._streamEl = null;
         }
       });
   }
 
-  // ── Gateway ──
-  _gwRequest(method, params) {
-    var self = this;
-    return new Promise(function (resolve, reject) {
-      var id = uid();
-      self._pending[id] = { resolve: resolve, reject: reject };
-      self._ws.send(JSON.stringify({ type: "req", id: id, method: method, params: params }));
-      setTimeout(function () {
-        if (self._pending[id]) {
-          delete self._pending[id];
-          reject(new Error("timeout"));
-        }
-      }, 30000);
+  // ── HTTP transport ──
+
+  // POST to the plugin HTTP API; returns parsed JSON.
+  async _gwRequest(path, body) {
+    var res = await fetch(this._apiRoot + path, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-openclaw-secret": this._secret,
+      },
+      body: JSON.stringify(body),
     });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
   }
 
-  _connectGateway() {
+  // Open (or reuse) an SSE stream for a given conversation.
+  _ensureStream(convId) {
+    if (this._es && this._esConv === convId) return;
+    if (this._es) this._es.close();
+    this._esConv = convId;
+    var url =
+      this._apiRoot +
+      "/stream?conversation_id=" +
+      encodeURIComponent(convId) +
+      "&secret=" +
+      encodeURIComponent(this._secret);
     var self = this;
-    // Auto-detect WS URL based on how HA is being accessed
-    var wsUrl = this._config.ws_url || "";
-    if (location.protocol === "http:") {
-      // Local HTTP access — use plain WS on LAN
-      wsUrl = "ws://" + location.hostname + ":18789";
-    }
-    try {
-      this._ws = new WebSocket(wsUrl);
-    } catch (e) {
-      this._status.textContent = "WS fail";
-      return;
-    }
-
-    this._ws.onopen = function () {
-      var id = uid();
-      self._pending[id] = {
-        resolve: function (payload) {
-          self._connId = payload?.server?.connId;
-          self._wsReady = true;
-          self._status.textContent = "Connected";
-          self._status.className = "conn-status connected";
-          self._loadConversations();
-          self._reconnectAttempt = 0;
-          self._hideBanner();
-          if (self._reconnectTimer) {
-            clearTimeout(self._reconnectTimer);
-            self._reconnectTimer = null;
-          }
-        },
-        reject: function (err) {
-          self._status.textContent = "Auth feilet";
-          self._showBanner("Autentisering feilet", "error", false);
-          self._reconnectAttempt = self._maxReconnectAttempts;
-        },
-      };
-      self._ws.send(
-        JSON.stringify({
-          type: "req",
-          id: id,
-          method: "connect",
-          params: {
-            minProtocol: 4,
-            maxProtocol: 4,
-            client: { id: "openclaw-control-ui", version: "1.0", platform: "web", mode: "webchat" },
-            role: "operator",
-            scopes: ["operator.read", "operator.write"],
-            auth: self._config.secret ? { token: self._config.secret } : undefined,
-          },
-        }),
-      );
+    this._es = new EventSource(url);
+    this._es.onopen = function () {
+      self._setConn("connected");
     };
-
-    this._ws.onmessage = function (e) {
-      var f = JSON.parse(e.data);
-      if (f.type === "res" && self._pending[f.id]) {
-        var p = self._pending[f.id];
-        delete self._pending[f.id];
-        f.ok ? p.resolve(f.payload) : p.reject(new Error(f.error?.message || "failed"));
-      } else if (f.type === "event") {
-        self._handleEvent(f.event, f.payload || {});
+    this._es.onerror = function () {
+      // EventSource auto-reconnects; just reflect the transient state.
+      self._setConn("connecting");
+    };
+    this._es.onmessage = function (ev) {
+      var e;
+      try {
+        e = JSON.parse(ev.data);
+      } catch (err) {
+        return;
       }
-    };
-
-    this._ws.onclose = function () {
-      self._wsReady = false;
-      self._status.textContent = "Frakoblet";
-      self._status.className = "conn-status disconnected";
-      self._scheduleReconnect();
-    };
-    this._ws.onerror = function () {
-      // onclose fires after onerror, reconnect handled there
+      if (e.type === "token") self._onStreamToken(e.token);
+      else if (e.type === "tool") {
+        if (self._thinkingEl) self._thinkingEl.textContent = "Running a tool…";
+      } else if (e.type === "done") self._onStreamDone(e.full_text);
+      else if (e.type === "error") self._onStreamError(e.error);
+      else if (e.type === "title") self._onStreamTitle(e.title, e.conversation_id);
     };
   }
 
-  _handleEvent(event, payload) {
-    if (event === "plugin.homeassistant.token" && this._streamEl) {
-      // First token — remove thinking indicator, start streaming
-      if (this._thinkingEl) {
-        this._streamEl.innerHTML = "";
-        this._thinkingEl = null;
-      }
-      this._streamText += payload.token || "";
-      if (!this._renderTimer) {
-        var self = this;
-        this._renderTimer = requestAnimationFrame(function () {
-          self._streamEl.innerHTML = renderMarkdown(self._streamText);
-          self._renderTimer = null;
-          self._messagesEl.scrollTop = self._messagesEl.scrollHeight;
-        });
-      }
-    } else if (event === "plugin.homeassistant.tool_call" && this._thinkingEl) {
-      var toolName = payload.tool || payload.name || "";
-      this._thinkingEl.textContent = TOOL_LABELS[toolName] || "Jobber...";
-    } else if (event === "plugin.homeassistant.done") {
-      if (this._streamEl && this._streamText) {
-        this._messageCache[this._activeConvId]?.push({
+  // ── Stream render helpers (called from SSE onmessage) ──
+
+  _onStreamToken(token) {
+    if (!this._streamEl) return;
+    // First token — remove thinking indicator, start streaming
+    if (this._thinkingEl) {
+      this._streamEl.innerHTML = "";
+      this._thinkingEl = null;
+    }
+    this._streamText += token || "";
+    if (!this._renderTimer) {
+      var self = this;
+      this._renderTimer = requestAnimationFrame(function () {
+        self._streamEl.innerHTML = renderMarkdown(self._streamText);
+        self._renderTimer = null;
+        self._messagesEl.scrollTop = self._messagesEl.scrollHeight;
+      });
+    }
+  }
+
+  _onStreamDone(fullText) {
+    if (this._streamEl && this._streamText) {
+      if (this._messageCache[this._activeConvId]) {
+        this._messageCache[this._activeConvId].push({
           role: "assistant",
           content: this._streamText,
         });
       }
-      this._streamEl = null;
-      this._thinkingEl = null;
-      this._streamText = "";
-      this._renderTimer = null;
-    } else if (event === "plugin.homeassistant.error" && this._streamEl) {
-      this._streamEl.innerHTML = "Error: " + escapeHtml(payload.error || "unknown");
-      this._streamEl = null;
-      this._thinkingEl = null;
-      this._renderTimer = null;
-    } else if (event === "plugin.homeassistant.title") {
-      var conv = this._conversations.find(function (c) {
-        return c.id === payload.conversation_id;
-      });
-      if (conv) {
-        conv.title = formatChatTitle(payload.title, conv.updatedAt);
-        this._renderConvList();
-      }
-      if (this._activeConvId === payload.conversation_id)
-        this._topTitle.textContent = formatChatTitle(payload.title, conv && conv.updatedAt);
     }
+    this._streamEl = null;
+    this._thinkingEl = null;
+    this._streamText = "";
+    this._renderTimer = null;
+  }
+
+  _onStreamError(error) {
+    if (this._streamEl) {
+      this._streamEl.innerHTML = "Error: " + escapeHtml(error || "unknown");
+      this._streamEl = null;
+    }
+    this._thinkingEl = null;
+    this._renderTimer = null;
+  }
+
+  _onStreamTitle(title, convId) {
+    var targetId = convId || this._activeConvId;
+    var conv = this._conversations.find(function (c) {
+      return c.id === targetId;
+    });
+    if (conv) {
+      conv.title = formatChatTitle(title, conv.updatedAt);
+      this._renderConvList();
+    }
+    if (this._activeConvId === targetId)
+      this._topTitle.textContent = formatChatTitle(title, conv && conv.updatedAt);
   }
 
   async _loadConversations() {
     try {
-      var res = await this._gwRequest("homeassistant.conversations", {
+      var res = await this._gwRequest("/conversations", {
         action: "list",
         user_id: this._user.id,
       });
-      this._conversations = (res?.conversations || []).map(function (c) {
+      this._conversations = (res && res.conversations ? res.conversations : []).map(function (c) {
         return {
           id: c.id,
           title: formatChatTitle(c.title || "Chat", c.updated_at),
@@ -1522,11 +1499,7 @@ class OpenClawPanel extends HTMLElement {
   }
 
   disconnectedCallback() {
-    if (this._ws) this._ws.close();
-    if (this._reconnectTimer) {
-      clearTimeout(this._reconnectTimer);
-      this._reconnectTimer = null;
-    }
+    if (this._es) this._es.close();
   }
 }
 customElements.define("openclaw-panel", OpenClawPanel);
