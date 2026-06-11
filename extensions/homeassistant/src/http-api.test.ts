@@ -52,6 +52,7 @@ describe("HA HTTP API", () => {
       getStore: () => store as any,
       getDispatch: () => dispatch as any,
       getSecret: () => "s",
+      getCfg: () => ({}),
       resolveUser: () => ({ user_id: "havnil", user_name: "Havard", is_admin: true }) as any,
     });
 

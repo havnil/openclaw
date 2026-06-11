@@ -9,6 +9,7 @@ export type HaHttpApiDeps = {
   getStore: () => ConversationStore | null;
   getDispatch: () => HaDispatchFn | null;
   getSecret: () => string;
+  getCfg: () => unknown;
   resolveUser: (body: Record<string, unknown>) => HaUserIdentity;
 };
 
@@ -144,11 +145,10 @@ async function handleSend(
   // Fire-and-forget dispatch
   void (async () => {
     let accumulated = "";
-    const controller = new AbortController();
 
     try {
       await dispatch({
-        cfg: undefined as never,
+        cfg: deps.getCfg() as Parameters<HaDispatchFn>[0]["cfg"],
         user,
         text,
         conversationId: convId,
@@ -165,7 +165,7 @@ async function handleSend(
         onError: (error: string) => {
           deps.hub.publish(convId, { type: "error", error });
         },
-        signal: controller.signal,
+        signal: new AbortController().signal,
       });
 
       const assistantMessage: StoredMessage = {
