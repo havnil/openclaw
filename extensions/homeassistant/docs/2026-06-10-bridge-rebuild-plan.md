@@ -521,23 +521,31 @@ Extract the existing token/done/error/title render logic from the old `_handleEv
 
 ---
 
-## Task 7: Offline integration test (no live home)
+## Task 7: Rigid verification — backend + frontend (acceptance gate)
 
-**Files:** none (manual/scripted verification in the worktree).
+This is the **gate before deploy**. It runs against a scratch gateway in the worktree (isolated home, non-production port) so the live home is never touched. Every step captures evidence. **Do not proceed to Task 8 until both 7A and 7B are fully green.** Build the two harnesses as reusable files — Task 8 reruns them against the live system.
 
-- [ ] **Step 1: Start a scratch gateway** on a non-production port in the worktree (`OPENCLAW_GATEWAY_PORT=18999 openclaw gateway run --bind loopback --port 18999`), using a temp `OPENCLAW_*` home if possible to avoid touching live state.
-- [ ] **Step 2: curl the API end-to-end**
+**Files:** Create `extensions/homeassistant/scripts/verify-backend.sh` and `extensions/homeassistant/scripts/verify-frontend.mjs`.
 
-```bash
-S=<secret>
-curl -s -XPOST localhost:18999/api/homeassistant/send -H "x-openclaw-secret: $S" -d '{"text":"hei"}'   # -> {conversation_id, new_conversation}
-curl -N localhost:18999/api/homeassistant/stream?conversation_id=<id>\&secret=$S                          # -> SSE token… done
-```
+### 7A — Backend
 
-Expected: the `send` returns a conversation id; the `stream` prints `data:` token frames then a `done`. **This proves send→stream→done without a browser.**
+- [ ] **Step 1: Static gates** — `OPENCLAW_LOCAL_CHECK=1 node scripts/run-tsgo.mjs -p tsconfig.extensions.json` (0 errors); `npx oxlint -c .oxlintrc.json --tsconfig config/tsconfig/oxlint.extensions.json extensions/homeassistant` (0 errors); `pnpm test -- extensions/homeassistant` (all green: `stream-hub`, `http-api`). Capture each exit code.
+- [ ] **Step 2: Scratch gateway** — start with the registered Anthropic profile but an isolated state dir if feasible: `OPENCLAW_GATEWAY_PORT=18999 openclaw gateway run --bind loopback --port 18999 > /tmp/ha-verify-gw.log 2>&1 &`. Wait for `[gateway] ready`; assert no `missing bundled-channel-entry contract` warning in the log.
+- [ ] **Step 3: Auth** — `send` with no secret and with a wrong secret → **HTTP 401**; with the correct secret → 200. Assert all three codes.
+- [ ] **Step 4: Real round-trip (not mocked)** — `POST /send {text:"hei"}` → `{conversation_id}`; then `curl -N .../stream?conversation_id=<id>&secret=<S>`. Expected: SSE prints one or more `data:{"type":"token",...}` frames from a **real model reply**, then `data:{"type":"done",...}`. This proves auth→model→in-process dispatch→stream end to end.
+- [ ] **Step 5: Endpoints** — `conversations` create→list→load→rename→delete (assert JSON each); `transcribe` with a tiny sample wav → `{text}`.
+- [ ] **Step 6: SSE cleanup** — open a `/stream`, drop the client (close curl), restart the scratch gateway → a fresh `/stream` works; no subscriber leak (a second send still streams).
+- [ ] **Step 7: Save + commit** `verify-backend.sh` (prints PASS/FAIL per step, non-zero exit on any failure). `scripts/committer "homeassistant: backend verification harness" extensions/homeassistant/scripts/verify-backend.sh`
 
-- [ ] **Step 3: Headless panel smoke** — point the existing `.ha-panel-shot.mjs` harness at the scratch HA (or load the panel file via `file://` with a stub `hass`/`panel` config) and confirm Connected + a reply renders.
-- [ ] **Step 4: Commit** any harness tweaks.
+### 7B — Frontend (browser-driven, real reply)
+
+- [ ] **Step 1: `verify-frontend.mjs`** (Playwright, auth via the HA long-lived token in `localStorage` as in `.ha-panel-shot.mjs`) loads the panel at **three viewports** — desktop 1280×800, iPad 834×1112, iPhone 390×844. For each: wait for `.conn-status.connected`, screenshot `/tmp/ha-verify-<vp>.png`. Assert all three reach connected.
+- [ ] **Step 2: Send + stream render** — fill `.input-textarea` with "hei", press Enter; poll `.msg-row.assistant .msg-bubble` until it holds a real reply (not `Tenker…`/empty). Assert the user bubble is right-aligned and the assistant left. Screenshot `/tmp/ha-verify-reply.png`.
+- [ ] **Step 3: Suggestion chip + tool indicator** — new chat → click the read-only chip "Hvilke lys er på?" → assert a reply renders, and that "Running a tool…" appeared on `.thinking-text` during the run.
+- [ ] **Step 4: History** — open the sidebar (`.hamburger-btn`), assert `.conv-title` values match `^\d{2}\.[A-Za-z]{3}: ` (the `dd.Mon:` format), click a second `.conv-info` → its messages load.
+- [ ] **Step 5: Reconnect** — kill the scratch gateway ~5s → assert the panel shows a disconnected/reconnecting indicator, then returns to `connected` after restart (EventSource auto-reconnect). Screenshot the banner.
+- [ ] **Step 6: Welcome state** — a fresh chat shows the greeting + chips. Screenshot `/tmp/ha-verify-welcome.png`.
+- [ ] **Step 7: Gate + commit** — all assertions pass and 5 screenshots captured (3 viewports + reply + welcome). `scripts/committer "homeassistant: frontend verification harness" extensions/homeassistant/scripts/verify-frontend.mjs`. **Both 7A and 7B green → proceed to Task 8.**
 
 ---
 
@@ -547,7 +555,7 @@ Expected: the `send` returns a conversation id; the `stream` prints `data:` toke
 - [ ] **Step 2: Merge** `ha-bridge-rebuild` → `main` (the repo the live gateway runs from). `pnpm install` is NOT needed (no dep changes); if any, run it with the gateway stopped.
 - [ ] **Step 3: Deploy panel** — copy the new panel + `__init__.py` (with bumped `?v=`) into `~/dev/project_jarvis/homeassistant/custom_components/openclaw/`.
 - [ ] **Step 4: Restart** — `openclaw gateway stop` → (only if deps changed: build) → `openclaw gateway restart`; then `docker restart homeassistant` to re-register the panel.
-- [ ] **Step 5: Verify** — `openclaw doctor` shows no HA skip warning; the WS-free `curl` send→stream works against the live gateway; open the panel on the phone and confirm a real reply.
+- [ ] **Step 5: Re-run the rigid verification LIVE** — run `verify-backend.sh` and `verify-frontend.mjs` (from Task 7) against the **live** gateway/HA (live port, live origin). All steps must pass: static gates already green; live auth 401s; live real send→stream→done; conversations/transcribe; all 3 viewports connected + reply rendered + reconnect. Then a human phone check: open the panel, send a message, confirm a real reply. Do not consider deploy complete until the live verification is green.
 - [ ] **Step 6: Rollback path** — if broken: restore the `*.bak` panel + `git checkout` the prior `main` + `openclaw gateway restart`.
 
 ---
