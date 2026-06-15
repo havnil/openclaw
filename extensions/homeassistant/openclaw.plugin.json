@@ -2,8 +2,11 @@
   "id": "homeassistant",
   "channels": ["homeassistant"],
   "name": "Home Assistant",
-  "description": "Home Assistant channel and tools — chat interface with WebSocket streaming and REST API control",
+  "description": "Home Assistant channel and tools — chat interface with HTTP/SSE panel and REST API control",
   "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
