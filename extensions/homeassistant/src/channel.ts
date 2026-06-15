@@ -117,6 +117,20 @@ export function getConversationStore(): ConversationStore | null {
   return conversationStoreInstance;
 }
 
+/**
+ * Lazily create (and cache) the conversation store for the current module
+ * instance. The HTTP API (registerFull) and the legacy channel `start` hook may
+ * run in different plugin load instances (setup-runtime vs full); each calls
+ * this so its own instance has a valid store rather than depending on the other.
+ */
+export function ensureConversationStore(): ConversationStore {
+  if (!conversationStoreInstance) {
+    const storeDir = join(homedir(), ".openclaw", "homeassistant", "conversations");
+    conversationStoreInstance = new ConversationStore(storeDir);
+  }
+  return conversationStoreInstance;
+}
+
 export function createHomeAssistantPlugin(): HaChannelPlugin {
   return createChatChannelPlugin({
     base: {
@@ -168,9 +182,8 @@ export function createHomeAssistantPlugin(): HaChannelPlugin {
             return waitUntilAbort(abortSignal);
           }
 
-          // Initialize conversation store
-          const storeDir = join(homedir(), ".openclaw", "homeassistant", "conversations");
-          conversationStoreInstance = new ConversationStore(storeDir);
+          // Initialize conversation store (shared helper; see ensureConversationStore)
+          ensureConversationStore();
 
           log?.info?.("Home Assistant channel started (gateway methods)");
 

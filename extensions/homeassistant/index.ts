@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-entry-contract";
 import { Type } from "typebox";
 import {
-  getConversationStore,
+  ensureConversationStore,
   getHaDispatch,
   getHaTranscribe,
   isAdmin,
@@ -114,10 +114,13 @@ function registerFull(api: OpenClawPluginApi): void {
   });
 
   // ── Serve panel via HTTP+SSE ─────────────────────────────────────────────
+  // Own the store in this (full-mode) instance so the HTTP handler never depends
+  // on the channel `start` hook, which may run in a different load instance.
+  const store = ensureConversationStore();
   const hub = new StreamHub();
   const haApi = createHaHttpApi({
     hub,
-    getStore: () => getConversationStore(),
+    getStore: () => store,
     getDispatch: () => getHaDispatch(),
     getSecret: () => resolveAccount(api.config as OpenClawConfig).secret,
     getCfg: () => api.config,
