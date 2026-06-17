@@ -75,7 +75,7 @@ function registerFull(api: OpenClawPluginApi): void {
 
   // ── Wire audio transcription via OC's media understanding pipeline ─────
   setHaTranscribe(async ({ audioData, mime }) => {
-    const { writeFile, unlink, stat } = await import("node:fs/promises");
+    const { writeFile, unlink } = await import("node:fs/promises");
     const { join } = await import("node:path");
     const { randomUUID } = await import("node:crypto");
     const ext = mime.includes("webm")
@@ -93,23 +93,15 @@ function registerFull(api: OpenClawPluginApi): void {
     );
     try {
       await writeFile(tmpPath, audioData);
-      const fileStats = await stat(tmpPath);
-      console.log(
-        `[ha:transcribe] wrote ${fileStats.size} bytes to ${tmpPath} (ext=${ext}, mime=${mime})`,
-      );
       const result = await api.runtime.mediaUnderstanding.transcribeAudioFile({
         filePath: tmpPath,
         cfg: api.config,
         mime,
       });
-      console.log(`[ha:transcribe] OC result: text="${result.text}" (${typeof result.text})`);
       return { text: result.text?.trim() || undefined };
-    } catch (err) {
-      console.error(`[ha:transcribe] ERROR:`, err);
-      throw err;
     } finally {
-      // Keep file for debugging - delete after 60s
-      setTimeout(() => unlink(tmpPath).catch(() => {}), 60000);
+      // Remove the temp clip promptly; do not retain user voice data on disk.
+      await unlink(tmpPath).catch(() => {});
     }
   });
 

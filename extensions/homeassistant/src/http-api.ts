@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { HaDispatchFn, HaTranscribeFn } from "./channel.js";
 import type { ConversationStore } from "./conversations.js";
@@ -19,6 +20,20 @@ export type HaHttpApi = {
   hub: StreamHub;
 };
 
+// Cap request bodies so a secret-holder cannot OOM the gateway by streaming an
+// unbounded payload. 8 MB is generous for base64-encoded voice clips.
+const MAX_BODY_BYTES = 8 * 1024 * 1024;
+
+class BodyTooLargeError extends Error {}
+
+// Conversation/user ids flow into ConversationStore filesystem paths; restrict
+// them to characters that cannot escape the store directory (no separators, no
+// traversal, no control chars). UUIDs and HA hex user ids match this.
+const SAFE_ID = /^[A-Za-z0-9_-]+$/;
+function isSafeId(value: string): boolean {
+  return SAFE_ID.test(value);
+}
+
 function cors(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "content-type, x-openclaw-secret");
@@ -34,8 +49,15 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 
 async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
+    total += buf.length;
+    if (total > MAX_BODY_BYTES) {
+      req.destroy();
+      throw new BodyTooLargeError();
+    }
+    chunks.push(buf);
   }
   const raw = Buffer.concat(chunks).toString("utf-8");
   if (!raw) {
@@ -52,16 +74,32 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
   }
 }
 
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  // timingSafeEqual requires equal-length buffers; the length guard is itself
+  // non-secret (the secret length is fixed by config), so this is acceptable.
+  if (ab.length !== bb.length) {
+    return false;
+  }
+  return timingSafeEqual(ab, bb);
+}
+
 function authOk(
   secret: string,
   headerValue: string | string[] | undefined,
   bodyValue: unknown,
 ): boolean {
+  // Fail closed: an unconfigured (empty) secret rejects everyone rather than
+  // authorizing a caller that sends an empty secret.
+  if (!secret) {
+    return false;
+  }
   const fromHeader = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-  if (typeof fromHeader === "string" && fromHeader === secret) {
+  if (typeof fromHeader === "string" && safeEqual(fromHeader, secret)) {
     return true;
   }
-  if (typeof bodyValue === "string" && bodyValue === secret) {
+  if (typeof bodyValue === "string" && safeEqual(bodyValue, secret)) {
     return true;
   }
   return false;
@@ -92,7 +130,9 @@ async function handleStream(
   res.write(": connected\n\n");
 
   const unsub = deps.hub.subscribe(conversationId, (event) => {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
+    // Stamp the owning conversation so the panel can ignore events for a
+    // conversation the user has since switched away from.
+    res.write(`data: ${JSON.stringify({ ...event, conversation_id: conversationId })}\n\n`);
   });
 
   const pingInterval = setInterval(() => {
@@ -131,6 +171,12 @@ async function handleSend(
   const text = String(body.text ?? "");
   let conversationId = typeof body.conversation_id === "string" ? body.conversation_id : undefined;
   let newConversation = false;
+
+  // Both ids become filesystem paths in the store; reject unsafe values up front.
+  if (!isSafeId(user.user_id) || (conversationId !== undefined && !isSafeId(conversationId))) {
+    json(res, 400, { error: "Invalid id" });
+    return;
+  }
 
   if (!conversationId) {
     const conv = await store.create(user.user_id);
@@ -221,6 +267,19 @@ async function handleConversations(
   if (!userId) {
     json(res, 400, { error: "Missing user_id" });
     return;
+  }
+  if (!isSafeId(userId)) {
+    json(res, 400, { error: "Invalid user_id" });
+    return;
+  }
+  // load/delete/rename take a client-supplied conversation_id that becomes a file
+  // path; validate it once here before any store call.
+  if (action === "load" || action === "delete" || action === "rename") {
+    const convId = typeof body.conversation_id === "string" ? body.conversation_id : "";
+    if (!isSafeId(convId)) {
+      json(res, 400, { error: "Invalid conversation_id" });
+      return;
+    }
   }
 
   switch (action) {
@@ -345,23 +404,34 @@ export function createHaHttpApi(deps: HaHttpApiDeps): HaHttpApi {
       return true;
     }
 
-    if (req.method === "GET" && sub === "/stream") {
-      await handleStream(req, res, deps);
-      return true;
-    }
+    try {
+      if (req.method === "GET" && sub === "/stream") {
+        await handleStream(req, res, deps);
+        return true;
+      }
 
-    if (req.method === "POST" && sub === "/send") {
-      await handleSend(req, res, deps);
-      return true;
-    }
+      if (req.method === "POST" && sub === "/send") {
+        await handleSend(req, res, deps);
+        return true;
+      }
 
-    if (req.method === "POST" && sub === "/conversations") {
-      await handleConversations(req, res, deps);
-      return true;
-    }
+      if (req.method === "POST" && sub === "/conversations") {
+        await handleConversations(req, res, deps);
+        return true;
+      }
 
-    if (req.method === "POST" && sub === "/transcribe") {
-      await handleTranscribe(req, res, deps);
+      if (req.method === "POST" && sub === "/transcribe") {
+        await handleTranscribe(req, res, deps);
+        return true;
+      }
+    } catch (err) {
+      // Body cap and any handler error map to a response here rather than a
+      // dangling rejection. headersSent guards an already-streaming SSE response.
+      if (!res.headersSent) {
+        json(res, err instanceof BodyTooLargeError ? 413 : 500, {
+          error: err instanceof BodyTooLargeError ? "Payload too large" : "Internal error",
+        });
+      }
       return true;
     }
 

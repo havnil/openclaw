@@ -5,7 +5,7 @@
   "description": "Home Assistant channel and tools — chat interface with HTTP/SSE panel and REST API control",
   "enabledByDefault": false,
   "activation": {
-    "onStartup": true
+    "onStartup": false
   },
   "contracts": {
     "tools": ["ha_get_states", "ha_call_service", "ha_get_history", "ha_fire_event"]
