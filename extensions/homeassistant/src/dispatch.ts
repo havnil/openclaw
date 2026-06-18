@@ -4,12 +4,13 @@ import {
   dispatchInboundMessage,
   finalizeInboundContext,
 } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveHaAgentId } from "./agent-routing.js";
 import type { HaDispatchFn } from "./channel.js";
 
 export async function runHaDispatch(params: Parameters<HaDispatchFn>[0]): Promise<void> {
   const { cfg, user, text, onToken, onToolActivity, onDone, onError } = params;
 
-  const agentId = user.is_admin ? "main" : "home";
+  const agentId = resolveHaAgentId(user);
 
   const ctxPayload = finalizeInboundContext({
     Body: text,
@@ -23,6 +24,7 @@ export async function runHaDispatch(params: Parameters<HaDispatchFn>[0]): Promis
     SenderId: user.user_id,
     Provider: "homeassistant" as const,
     Surface: "homeassistant" as const,
+    AgentId: agentId,
     OriginatingChannel: "homeassistant" as const,
     OriginatingTo: `ha:${user.user_id}`,
     CommandAuthorized: user.is_admin,
