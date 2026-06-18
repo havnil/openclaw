@@ -286,9 +286,11 @@ function registerFull(api: OpenClawPluginApi): void {
         const cfg = (toolCtx.getRuntimeConfig?.() ?? toolCtx.runtimeConfig ?? toolCtx.config) as
           | OpenClawConfig
           | undefined;
+        // Fail closed: never default a missing agent id to "main" — that would write one
+        // person's fact into the owner's memory. (In practice ctx.workspaceDir is always set.)
         const workspaceDir =
           toolCtx.workspaceDir ??
-          (cfg ? resolveAgentWorkspaceDir(cfg, toolCtx.agentId ?? "main") : undefined);
+          (cfg && toolCtx.agentId ? resolveAgentWorkspaceDir(cfg, toolCtx.agentId) : undefined);
         if (!workspaceDir) {
           return {
             content: [{ type: "text" as const, text: "Could not resolve memory location." }],
