@@ -9,7 +9,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import plugin, { testing } from "./index.js";
+import plugin, { agentMatchesAllowlist, testing } from "./index.js";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -797,6 +797,13 @@ describe("active-memory plugin", () => {
 
     expect(result).toBeUndefined();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("matches per-user agents via a home-* prefix entry", () => {
+    expect(agentMatchesAllowlist(["home-*"], "home-abc")).toBe(true);
+    expect(agentMatchesAllowlist(["home-*"], "main")).toBe(false);
+    expect(agentMatchesAllowlist(["main"], "main")).toBe(true);
+    expect(agentMatchesAllowlist(["main"], "home-x")).toBe(false);
   });
 
   it("does not rewrite session state for skipped turns with no active-memory entry to clear", async () => {

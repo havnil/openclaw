@@ -1096,6 +1096,13 @@ function buildRecallPrompt(params: {
   ].join("\n\n");
 }
 
+/** Allowlist entry matching: a trailing "*" is a prefix (e.g. "home-*" matches "home-abc"). */
+export function agentMatchesAllowlist(agents: string[], agentId: string): boolean {
+  return agents.some((entry) =>
+    entry.endsWith("*") ? agentId.startsWith(entry.slice(0, -1)) : entry === agentId,
+  );
+}
+
 function isEnabledForAgent(
   config: ResolvedActiveRecallPluginConfig,
   agentId: string | undefined,
@@ -1106,7 +1113,7 @@ function isEnabledForAgent(
   if (!agentId) {
     return false;
   }
-  return config.agents.includes(agentId);
+  return agentMatchesAllowlist(config.agents, agentId);
 }
 
 function isEligibleInteractiveSession(ctx: {
