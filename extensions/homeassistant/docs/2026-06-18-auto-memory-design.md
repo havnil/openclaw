@@ -39,9 +39,9 @@ their memory private and personalized for free — no changes to the shared memo
 
 - **Identity = `hass.user.id`** (a stable 32-hex id per HA account; verified present on disk,
   e.g. `e1beb36…`). The panel already sends it as `user_id`. Same account on phone + tablet =
-  same id = one memory. (Caveat: a kiosk/shared tablet without per-user HA login would send a
-  shared id and merge people — verify on the real devices before relying on it; out of scope
-  to solve here.)
+  same id = one memory. The household kiosk/tablet is logged in as the owner, so it routes to
+  the owner's `main` memory — no cross-person merging. Each other person uses their own HA login
+  on their own device.
 - **Routing:** HA dispatch sets `ctx.AgentId`:
   - admin (the owner) → `main` (HA chats enrich the owner's unified cross-channel assistant)
   - everyone else → `home-<normalizedHassUserId>` (auto-provisioned on first message:
@@ -109,10 +109,12 @@ plugin prompt contribution — chosen in the plan). Content:
 
 ## Out of scope (v1)
 
-- **Shared household layer (v2):** built on the per-person baseline. Needs cross-agent recall
-  (one person's agent searching a shared `household` store) — deferred deliberately.
+- **Shared household layer (v2):** built on the per-person baseline via **periodic extraction**
+  — a scheduled job promotes selected knowledge from individual stores (e.g. Nora's) into a
+  shared `household` store (analogous to dreaming's promotion), rather than live cross-agent
+  recall. Per-person stores stay the source of truth. Deferred deliberately. (v1 keeps the
+  per-person memory format clean enough to extract from later.)
 - **Hard memory delete tool (v2):** v1 corrects via append + reconciliation.
-- **Kiosk/shared-device identity disambiguation:** verify real devices; not solved here.
 
 ## Error handling & edge cases
 
