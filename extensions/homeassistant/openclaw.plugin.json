@@ -8,7 +8,7 @@
     "onStartup": false
   },
   "contracts": {
-    "tools": ["ha_get_states", "ha_call_service", "ha_get_history", "ha_fire_event"]
+    "tools": ["ha_get_states", "ha_call_service", "ha_get_history", "ha_fire_event", "remember"]
   },
   "configSchema": {
     "type": "object",

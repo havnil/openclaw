@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
+import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   defineBundledChannelEntry,
   type OpenClawPluginApi,
@@ -16,6 +17,7 @@ import {
 import { runHaDispatch } from "./src/dispatch.js";
 import { createHaHttpApi } from "./src/http-api.js";
 import type { HaUserIdentity } from "./src/protocol.js";
+import { appendMemoryLine, localDateStamp } from "./src/remember.js";
 import { StreamHub } from "./src/stream-hub.js";
 
 export { homeAssistantPlugin } from "./src/channel.js";
@@ -251,6 +253,52 @@ function registerFull(api: OpenClawPluginApi): void {
       },
     },
     { optional: true },
+  );
+
+  // ── remember: durable per-user memory capture (writes to the running agent's memory) ──
+  api.registerTool(
+    (toolCtx) => ({
+      name: "remember",
+      label: "Remember",
+      description:
+        "Save a durable fact about the current user to long-term memory: a preference, recipe, " +
+        "personal fact, standing instruction, recurring concern, or media/playlist they like. " +
+        "Call this when the user shares something worth remembering, then briefly acknowledge it.",
+      parameters: Type.Object({
+        fact: Type.String({ description: "The distilled fact to remember, one sentence." }),
+        category: Type.Optional(
+          Type.String({
+            description: "Optional tag: preference, recipe, fact, instruction, concern, or media.",
+          }),
+        ),
+      }),
+      async execute(_id, params) {
+        const { fact, category } = params as { fact: string; category?: string };
+        if (!fact?.trim()) {
+          return { content: [{ type: "text" as const, text: "No fact provided." }], details: {} };
+        }
+        const cfg = (toolCtx.getRuntimeConfig?.() ?? toolCtx.runtimeConfig ?? toolCtx.config) as
+          | OpenClawConfig
+          | undefined;
+        const workspaceDir =
+          toolCtx.workspaceDir ??
+          (cfg ? resolveAgentWorkspaceDir(cfg, toolCtx.agentId ?? "main") : undefined);
+        if (!workspaceDir) {
+          return {
+            content: [{ type: "text" as const, text: "Could not resolve memory location." }],
+            details: {},
+          };
+        }
+        const line = await appendMemoryLine({
+          workspaceDir,
+          dateStamp: localDateStamp(new Date()),
+          fact,
+          category,
+        });
+        return { content: [{ type: "text" as const, text: `Remembered: ${line}` }], details: {} };
+      },
+    }),
+    { names: ["remember"] },
   );
 }
 
