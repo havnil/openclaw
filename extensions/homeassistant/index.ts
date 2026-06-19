@@ -16,7 +16,7 @@ import {
 } from "./src/channel.js";
 import { runHaDispatch } from "./src/dispatch.js";
 import { createHaHttpApi } from "./src/http-api.js";
-import { HA_MEMORY_GUIDANCE, shouldInjectHaGuidance } from "./src/memory-guidance.js";
+import { buildHaPrependContext } from "./src/memory-guidance.js";
 import type { HaUserIdentity } from "./src/protocol.js";
 import { appendMemoryLine, localDateStamp } from "./src/remember.js";
 import { StreamHub } from "./src/stream-hub.js";
@@ -76,10 +76,12 @@ function registerFull(api: OpenClawPluginApi): void {
   // ── Wire in-process AI dispatch ──────────────────────────────────────────
   setHaDispatch(runHaDispatch);
 
-  // Inject capture/suggestion guidance into HA agent runs (uniform across main + home-* agents).
-  api.on("before_prompt_build", (_event, ctx) =>
-    shouldInjectHaGuidance(ctx) ? { prependContext: HA_MEMORY_GUIDANCE } : undefined,
-  );
+  // Inject HA run context: memory guidance for every HA run, plus the household persona for
+  // the shared home-* agents (the owner's main agent keeps its own identity).
+  api.on("before_prompt_build", (_event, ctx) => {
+    const prependContext = buildHaPrependContext(ctx);
+    return prependContext ? { prependContext } : undefined;
+  });
 
   // ── Wire audio transcription via OC's media understanding pipeline ─────
   setHaTranscribe(async ({ audioData, mime }) => {
