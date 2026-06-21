@@ -368,6 +368,16 @@ const STYLES = `
 
   .msg-bubble p { margin: 0 0 8px; }
   .msg-bubble p:last-child { margin-bottom: 0; }
+  .tool-pill {
+    display: inline-block;
+    margin: 0 0 8px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--primary-color, #03a9f4) 14%, transparent);
+    color: var(--primary-text-color, #212121);
+    font-size: 12px;
+    opacity: 0.85;
+  }
   .msg-bubble pre {
     background: color-mix(in srgb, var(--primary-text-color, #212121) 8%, transparent);
     border-radius: 8px;
@@ -890,7 +900,7 @@ class OpenClawPanel extends HTMLElement {
           <button class="home-btn" title="Back">${ICON.home}</button>
           <button class="hamburger-btn" title="Chat history">${ICON.hamburger}</button>
           <span class="topbar-title">OpenClaw</span>
-          <span class="conn-status disconnected">Connecting...</span>
+          <span class="conn-status connecting">Connecting...</span>
         </div>
         <div class="conn-banner"></div>
         <div class="messages-container"></div>
@@ -1267,10 +1277,16 @@ class OpenClawPanel extends HTMLElement {
       row.className = "msg-row " + (m.role || "assistant");
       var bubble = document.createElement("div");
       bubble.className = "msg-bubble";
-      bubble.innerHTML =
+      var body =
         m.role === "assistant"
           ? renderMarkdown(m.content || m.text || "")
           : escapeHtml(m.content || m.text || "");
+      var toolPills = "";
+      var tc = Number(m.tool_count) || 0;
+      for (var i = 0; i < tc; i++) {
+        toolPills += '<div class="tool-pill">🛠 Verktøy brukt</div>';
+      }
+      bubble.innerHTML = toolPills + body;
       row.appendChild(bubble);
       if (m.ts) {
         var time = document.createElement("div");
@@ -1334,6 +1350,10 @@ class OpenClawPanel extends HTMLElement {
 
     // Ensure SSE stream is open for this conversation before sending
     this._ensureStream(convId);
+
+    // Watchdog: if the reply never arrives over SSE (dropped stream, dead connection),
+    // recover it from the store so the UI never sticks on "Tenker…" forever.
+    this._startWatchdog();
 
     // POST /send — returns immediately; reply arrives via SSE
     var self = this;
@@ -1411,9 +1431,8 @@ class OpenClawPanel extends HTMLElement {
         return;
       }
       if (e.type === "token") self._onStreamToken(e.token);
-      else if (e.type === "tool") {
-        if (self._thinkingEl) self._thinkingEl.textContent = "Running a tool…";
-      } else if (e.type === "done") self._onStreamDone(e.full_text);
+      else if (e.type === "tool") self._onStreamTool();
+      else if (e.type === "done") self._onStreamDone(e.full_text);
       else if (e.type === "error") self._onStreamError(e.error);
       else if (e.type === "title") self._onStreamTitle(e.title, e.conversation_id);
     };
@@ -1422,6 +1441,7 @@ class OpenClawPanel extends HTMLElement {
   // ── Stream render helpers (called from SSE onmessage) ──
 
   _onStreamToken(token) {
+    this._bumpWatchdog();
     if (!this._streamEl) return;
     // First token — remove thinking indicator, start streaming
     if (this._thinkingEl) {
@@ -1439,28 +1459,118 @@ class OpenClawPanel extends HTMLElement {
     }
   }
 
+  // Tool activity: the server emits a bare `tool` event (it cannot expose
+  // the tool name/args via the dispatcher seam yet). Render a visible pill
+  // in the message stream so users can see that the agent is acting — not
+  // just "Tenker…" while it silently calls services.
+  _onStreamTool() {
+    this._bumpWatchdog();
+    this._streamToolCount = (this._streamToolCount || 0) + 1;
+    if (this._thinkingEl) {
+      this._thinkingEl.textContent = "Bruker verktøy…";
+    }
+    if (!this._streamEl) return;
+    // One pill per call, appended above any text already streamed in.
+    var pill = document.createElement("div");
+    pill.className = "tool-pill";
+    pill.textContent = "🛠 Verktøy brukt";
+    if (this._streamEl.firstChild) {
+      this._streamEl.insertBefore(pill, this._streamEl.firstChild);
+    } else {
+      this._streamEl.appendChild(pill);
+    }
+    this._messagesEl.scrollTop = this._messagesEl.scrollHeight;
+  }
+
   _onStreamDone(fullText) {
-    if (this._streamEl && this._streamText) {
+    this._clearWatchdog();
+    if (this._streamEl && (this._streamText || this._streamToolCount)) {
       if (this._messageCache[this._activeConvId]) {
         this._messageCache[this._activeConvId].push({
           role: "assistant",
           content: this._streamText,
+          tool_count: this._streamToolCount || 0,
         });
       }
     }
     this._streamEl = null;
     this._thinkingEl = null;
     this._streamText = "";
+    this._streamToolCount = 0;
     this._renderTimer = null;
   }
 
   _onStreamError(error) {
+    this._clearWatchdog();
     if (this._streamEl) {
       this._streamEl.innerHTML = "Error: " + escapeHtml(error || "unknown");
       this._streamEl = null;
     }
     this._thinkingEl = null;
     this._renderTimer = null;
+  }
+
+  // ── Reply watchdog ──
+  // The reply is always persisted server-side, so even if SSE never delivers it (dead
+  // connection, blocked EventSource), we can fetch it from the store. This guarantees the
+  // "Tenker…" indicator always resolves to either the streamed reply or the stored one.
+
+  _startWatchdog() {
+    this._clearWatchdog();
+    var self = this;
+    this._watchdog = setTimeout(function () {
+      self._watchdog = null;
+      self._recoverReply(self._activeConvId);
+    }, 75000);
+  }
+
+  _bumpWatchdog() {
+    // Activity means the stream is alive — restart the idle timer.
+    if (this._watchdog) this._startWatchdog();
+  }
+
+  _clearWatchdog() {
+    if (this._watchdog) {
+      clearTimeout(this._watchdog);
+      this._watchdog = null;
+    }
+  }
+
+  async _recoverReply(convId) {
+    // Only recover if we're still waiting (the thinking bubble is still showing).
+    if (!this._streamEl) return;
+    var content = null;
+    try {
+      var res = await this._gwRequest("/conversations", {
+        action: "load",
+        conversation_id: convId,
+        user_id: this._user.id,
+      });
+      var msgs = (res && res.messages) || [];
+      for (var i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === "assistant" && msgs[i].content) {
+          content = msgs[i].content;
+          break;
+        }
+      }
+    } catch (err) {
+      content = null;
+    }
+    if (!this._streamEl) return; // a late SSE event resolved it while we fetched
+    this._thinkingEl = null;
+    if (content) {
+      this._streamText = content;
+      this._streamEl.innerHTML = renderMarkdown(content);
+      if (this._messageCache[this._activeConvId]) {
+        this._messageCache[this._activeConvId].push({ role: "assistant", content: content });
+      }
+    } else {
+      this._streamEl.innerHTML = "<em>Svaret tok for lang tid — prøv igjen.</em>";
+    }
+    this._streamEl = null;
+    this._streamText = "";
+    this._streamToolCount = 0;
+    this._messagesEl.scrollTop = this._messagesEl.scrollHeight;
   }
 
   _onStreamTitle(title, convId) {
@@ -1490,12 +1600,16 @@ class OpenClawPanel extends HTMLElement {
         };
       });
       this._renderConvList();
+      // API responded — we are reachable even without an SSE stream.
+      this._setConn("connected");
       // Open a fresh chat by default; past chats stay available in the sidebar.
       if (!this._activeConvId) {
         this._topTitle.textContent = "New Chat";
         this._renderMessages();
       }
-    } catch (e) {}
+    } catch (e) {
+      this._setConn("disconnected");
+    }
   }
 
   disconnectedCallback() {

@@ -122,6 +122,14 @@ async function handleStream(
 
   const conversationId = url.searchParams.get("conversation_id") ?? "";
 
+  // EventSource resends Last-Event-ID on reconnect; replay only events newer than that so a
+  // dropped/reconnecting stream catches up (incl. the terminal `done`) without duplicates.
+  const lastEventIdHeader = req.headers["last-event-id"];
+  const lastEventIdRaw = Array.isArray(lastEventIdHeader)
+    ? lastEventIdHeader[0]
+    : lastEventIdHeader;
+  const lastEventId = lastEventIdRaw ? Number.parseInt(lastEventIdRaw, 10) : Number.NaN;
+
   cors(res);
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream");
@@ -129,11 +137,17 @@ async function handleStream(
   res.setHeader("Connection", "keep-alive");
   res.write(": connected\n\n");
 
-  const unsub = deps.hub.subscribe(conversationId, (event) => {
-    // Stamp the owning conversation so the panel can ignore events for a
-    // conversation the user has since switched away from.
-    res.write(`data: ${JSON.stringify({ ...event, conversation_id: conversationId })}\n\n`);
-  });
+  const unsub = deps.hub.subscribe(
+    conversationId,
+    (event, seq) => {
+      // Stamp the owning conversation so the panel can ignore events for a conversation the
+      // user has since switched away from. The `id:` lets EventSource resume after a drop.
+      res.write(
+        `id: ${seq}\ndata: ${JSON.stringify({ ...event, conversation_id: conversationId })}\n\n`,
+      );
+    },
+    Number.isFinite(lastEventId) ? lastEventId : undefined,
+  );
 
   const pingInterval = setInterval(() => {
     res.write(": ping\n\n");
