@@ -37,14 +37,14 @@ describe("buildHaPrependContext", () => {
       buildHaPrependContext({ messageProvider: "whatsapp", agentId: "home-x" }),
     ).toBeUndefined();
   });
-  it("gives home-* agents the persona plus memory guidance", () => {
+  it("injects persona + memory guidance for home-* agents", () => {
     const ctx = buildHaPrependContext({ messageProvider: "homeassistant", agentId: "home-abc" });
     expect(ctx).toContain(HA_PERSONA);
     expect(ctx).toContain(HA_MEMORY_GUIDANCE);
   });
-  it("gives the owner's main agent memory guidance only (no household persona)", () => {
+  it("also injects the persona for the owner's main agent on HA (settled identity, no name pestering)", () => {
     const ctx = buildHaPrependContext({ messageProvider: "homeassistant", agentId: "main" });
+    expect(ctx).toContain(HA_PERSONA);
     expect(ctx).toContain(HA_MEMORY_GUIDANCE);
-    expect(ctx).not.toContain(HA_PERSONA);
   });
 });
