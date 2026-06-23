@@ -144,17 +144,37 @@ function registerFull(api: OpenClawPluginApi): void {
     name: "ha_get_states",
     label: "Get States",
     description:
-      "Get the current state of one or all Home Assistant entities. " +
-      "Pass an entity_id to get a single entity, or omit it to get all states.",
+      "Get Home Assistant entity states. Pass an entity_id for ONE entity's full state " +
+      "(all attributes). Omit it for a COMPACT summary of all entities (id, state, name, unit) " +
+      "— then fetch a specific entity_id if you need its full attributes.",
     parameters: Type.Object({
       entity_id: Type.Optional(Type.String({ description: "Entity ID, e.g. light.living_room" })),
     }),
     async execute(_id, params) {
       const { entity_id } = params as { entity_id?: string };
-      const path = entity_id ? `/api/states/${entity_id}` : "/api/states";
-      const data = await ha.request("GET", path);
+      if (entity_id) {
+        const data = await ha.request("GET", `/api/states/${entity_id}`);
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+          details: {},
+        };
+      }
+      // All-states: return a compact projection. The full per-entity attribute blobs for a
+      // whole home are tens of thousands of tokens and would bloat the agent context; the
+      // entity's `state` already carries the headline value (e.g. a sensor reading).
+      const all = (await ha.request("GET", "/api/states")) as Array<{
+        entity_id: string;
+        state: string;
+        attributes?: { friendly_name?: string; unit_of_measurement?: string };
+      }>;
+      const compact = all.map((e) => ({
+        entity_id: e.entity_id,
+        state: e.state,
+        ...(e.attributes?.friendly_name ? { name: e.attributes.friendly_name } : {}),
+        ...(e.attributes?.unit_of_measurement ? { unit: e.attributes.unit_of_measurement } : {}),
+      }));
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+        content: [{ type: "text" as const, text: JSON.stringify(compact, null, 2) }],
         details: {},
       };
     },

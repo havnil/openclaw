@@ -8,9 +8,15 @@ import { resolveHaAgentId } from "./agent-routing.js";
 import type { HaDispatchFn } from "./channel.js";
 
 export async function runHaDispatch(params: Parameters<HaDispatchFn>[0]): Promise<void> {
-  const { cfg, user, text, onToken, onToolActivity, onDone, onError } = params;
+  const { cfg, user, text, conversationId, onToken, onToolActivity, onDone, onError } = params;
 
   const agentId = resolveHaAgentId(user);
+
+  // Scope the agent session to the panel conversation, not the user. Each "new chat" is a
+  // fresh conversation_id and therefore a fresh session, so the working transcript (and any
+  // large ha_get_states results) never accumulates across chats. Cross-chat memory still
+  // comes from the memory system (active-memory + MEMORY.md), not the session transcript.
+  const sessionKey = `ha:${user.user_id}:${conversationId}`;
 
   const ctxPayload = finalizeInboundContext({
     Body: text,
@@ -19,7 +25,7 @@ export async function runHaDispatch(params: Parameters<HaDispatchFn>[0]): Promis
     RawBody: text,
     From: `ha:${user.user_id}`,
     To: `ha:${user.user_id}`,
-    SessionKey: `ha:${user.user_id}`,
+    SessionKey: sessionKey,
     SenderName: user.user_name,
     SenderId: user.user_id,
     Provider: "homeassistant" as const,
