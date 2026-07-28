@@ -49,6 +49,7 @@ type HookAction =
       kind: "wake";
       text: string;
       mode: "now" | "next-heartbeat";
+      agentId?: string;
     }
   | {
       kind: "agent";
@@ -266,6 +267,7 @@ function buildActionFromMapping(
         kind: "wake",
         text,
         mode: mapping.wakeMode ?? "now",
+        agentId: mapping.agentId,
       },
     };
   }
@@ -304,7 +306,12 @@ function mergeAction(
     const baseWake = base.kind === "wake" ? base : undefined;
     const text = typeof override.text === "string" ? override.text : (baseWake?.text ?? "");
     const mode = override.mode === "next-heartbeat" ? "next-heartbeat" : (baseWake?.mode ?? "now");
-    return validateAction({ kind: "wake", text, mode });
+    return validateAction({
+      kind: "wake",
+      text,
+      mode,
+      agentId: override.agentId ?? base.agentId,
+    });
   }
   const baseAgent = base.kind === "agent" ? base : undefined;
   const message =
@@ -316,7 +323,7 @@ function mergeAction(
     message,
     wakeMode,
     name: override.name ?? baseAgent?.name,
-    agentId: override.agentId ?? baseAgent?.agentId,
+    agentId: override.agentId ?? base.agentId,
     sessionKey: override.sessionKey ?? baseAgent?.sessionKey,
     sessionKeySource: resolveMergedSessionKeySource(baseAgent, override),
     deliver: typeof override.deliver === "boolean" ? override.deliver : baseAgent?.deliver,
