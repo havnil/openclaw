@@ -215,6 +215,7 @@ export async function prepareChatSendAttachments(params: {
         async () => {
           const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
             loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+            agentId,
             provider: resolvedSessionModel.provider,
             model: resolvedSessionModel.model,
           });
