@@ -3,6 +3,10 @@
  * token usage, chooses chunking strategy, and preserves active tool-use pairs
  * while splitting history for summaries.
  */
+import {
+  projectCompactionPlanningMessages,
+  readCompactionPlanningOmittedChars,
+} from "./compaction-planning-projection.js";
 import { stripRuntimeContextCustomMessages } from "./internal-runtime-context.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
@@ -51,7 +55,23 @@ export type HistoryPrunePlan = {
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details and runtime-context transcript entries must never enter LLM-facing compaction.
   const safe = sanitizeCompactionMessages(messages);
-  return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
+  return safe.reduce((sum, message) => sum + estimateCompactionPlanningTokens(message), 0);
+}
+
+/**
+ * Per-original-message token estimates, aligned 1:1 to the input array. Sanitizes
+ * the full array once instead of wrapping and re-cloning each message in its own
+ * 1-element array. Runtime-context entries are not model-visible, so they estimate
+ * to 0 here just as sanitizeCompactionMessages([msg]) would drop them.
+ */
+function estimatePerMessageTokens(messages: AgentMessage[]): number[] {
+  // SECURITY: toolResult.details must never enter LLM-facing compaction; strip once for the whole array.
+  const detailStripped = stripToolResultDetails(messages);
+  // stripRuntimeContextCustomMessages filters by reference, so kept entries keep their identity.
+  const modelVisible = new Set(stripRuntimeContextCustomMessages(detailStripped));
+  return detailStripped.map((message) =>
+    modelVisible.has(message) ? estimateCompactionPlanningTokens(message) : 0,
+  );
 }
 
 /** Removes runtime-only context and tool-result details before token estimates or summaries. */
@@ -60,12 +80,26 @@ export function sanitizeCompactionMessages(messages: AgentMessage[]): AgentMessa
 }
 
 /** Estimates one message using the same sanitization path as multi-message planning. */
-export function estimateCompactionMessageTokens(message: AgentMessage): number {
+function estimateCompactionMessageTokens(message: AgentMessage): number {
   return estimateMessagesTokens([message]);
 }
 
+function estimateCompactionPlanningTokens(message: AgentMessage): number {
+  const omittedChars = readCompactionPlanningOmittedChars(message);
+  if (omittedChars === 0) {
+    return estimateTokens(message);
+  }
+  return estimateTokens(message) + Math.ceil(omittedChars / 4);
+}
+
+/** Builds a bounded planning projection that preserves token pressure accounting. */
+export function projectCompactionMessagesForPlanning(messages: AgentMessage[]): AgentMessage[] {
+  const safe = sanitizeCompactionMessages(messages);
+  return projectCompactionPlanningMessages(safe);
+}
+
 /** Clamps requested split parts to a usable count for the available messages. */
-export function normalizeCompactionParts(parts: number, messageCount: number): number {
+function normalizeCompactionParts(parts: number, messageCount: number): number {
   if (!Number.isFinite(parts) || parts <= 1) {
     return 1;
   }
@@ -73,7 +107,7 @@ export function normalizeCompactionParts(parts: number, messageCount: number): n
 }
 
 /** Splits messages into roughly equal token-share chunks without separating active tool pairs. */
-export function splitMessagesByTokenShare(
+function splitMessagesByTokenShare(
   messages: AgentMessage[],
   parts = DEFAULT_PARTS,
 ): AgentMessage[][] {
@@ -85,7 +119,10 @@ export function splitMessagesByTokenShare(
     return [messages];
   }
 
-  const totalTokens = estimateMessagesTokens(messages);
+  // Sanitize the full array once and reuse per-message token counts; avoids the
+  // per-message [msg] wrap-and-clone that previously ran on every iteration.
+  const perMessageTokens = estimatePerMessageTokens(messages);
+  const totalTokens = perMessageTokens.reduce((sum, tokens) => sum + tokens, 0);
   const targetTokens = totalTokens / normalizedParts;
   const chunks: AgentMessage[][] = [];
   let current: AgentMessage[] = [];
@@ -93,6 +130,9 @@ export function splitMessagesByTokenShare(
 
   let pendingToolCallIds = new Set<string>();
   let pendingChunkStartIndex: number | null = null;
+  // Token count for each message currently buffered in `current`, kept in lockstep so a
+  // boundary split can re-sum without re-estimating.
+  let currentTokenCounts: number[] = [];
 
   const splitCurrentAtPendingBoundary = (): boolean => {
     if (
@@ -105,13 +145,17 @@ export function splitMessagesByTokenShare(
     // Keep an assistant tool_use and its following tool_result responses in the same chunk.
     chunks.push(current.slice(0, pendingChunkStartIndex));
     current = current.slice(pendingChunkStartIndex);
-    currentTokens = current.reduce((sum, msg) => sum + estimateCompactionMessageTokens(msg), 0);
+    currentTokenCounts = currentTokenCounts.slice(pendingChunkStartIndex);
+    currentTokens = currentTokenCounts.reduce((sum, tokens) => sum + tokens, 0);
     pendingChunkStartIndex = 0;
     return true;
   };
 
-  for (const message of messages) {
-    const messageTokens = estimateCompactionMessageTokens(message);
+  for (const [index, message] of messages.entries()) {
+    const messageTokens = perMessageTokens.at(index);
+    if (messageTokens === undefined) {
+      throw new Error("Compaction token estimates are out of sync with messages");
+    }
 
     if (
       pendingToolCallIds.size === 0 &&
@@ -121,11 +165,13 @@ export function splitMessagesByTokenShare(
     ) {
       chunks.push(current);
       current = [];
+      currentTokenCounts = [];
       currentTokens = 0;
       pendingChunkStartIndex = null;
     }
 
     current.push(message);
+    currentTokenCounts.push(messageTokens);
     currentTokens += messageTokens;
 
     if (message.role === "assistant") {
@@ -171,10 +217,7 @@ export function splitMessagesByTokenShare(
 }
 
 /** Chunks messages by a max-token budget while applying the shared estimator safety margin. */
-export function chunkMessagesByMaxTokens(
-  messages: AgentMessage[],
-  maxTokens: number,
-): AgentMessage[][] {
+function chunkMessagesByMaxTokens(messages: AgentMessage[], maxTokens: number): AgentMessage[][] {
   if (messages.length === 0) {
     return [];
   }
@@ -183,12 +226,18 @@ export function chunkMessagesByMaxTokens(
   // (chars/4 heuristic misses multi-byte chars, special tokens, code tokens, etc.)
   const effectiveMax = Math.max(1, Math.floor(maxTokens / SAFETY_MARGIN));
 
+  // Sanitize the full array once and reuse per-message token counts; avoids the
+  // per-message [msg] wrap-and-clone that previously ran on every iteration.
+  const perMessageTokens = estimatePerMessageTokens(messages);
   const chunks: AgentMessage[][] = [];
   let currentChunk: AgentMessage[] = [];
   let currentTokens = 0;
 
-  for (const message of messages) {
-    const messageTokens = estimateCompactionMessageTokens(message);
+  for (const [index, message] of messages.entries()) {
+    const messageTokens = perMessageTokens.at(index);
+    if (messageTokens === undefined) {
+      throw new Error("Compaction token estimates are out of sync with messages");
+    }
     if (currentChunk.length > 0 && currentTokens + messageTokens > effectiveMax) {
       chunks.push(currentChunk);
       currentChunk = [];
@@ -265,10 +314,18 @@ export function buildOversizedFallbackPlan(params: {
   const smallMessages: AgentMessage[] = [];
   const oversizedNotes: string[] = [];
 
-  for (const msg of params.messages) {
-    if (isOversizedForSummary(msg, params.contextWindow)) {
+  // Sanitize the full array once and reuse per-message token counts; avoids the
+  // per-message [msg] wrap-and-clone (twice per oversized message) of the prior loop.
+  const perMessageTokens = estimatePerMessageTokens(params.messages);
+  const oversizedThreshold = params.contextWindow * 0.5;
+
+  for (const [index, msg] of params.messages.entries()) {
+    const tokens = perMessageTokens.at(index);
+    if (tokens === undefined) {
+      throw new Error("Compaction token estimates are out of sync with messages");
+    }
+    if (tokens * SAFETY_MARGIN > oversizedThreshold) {
       const role = (msg as { role?: string }).role ?? "message";
-      const tokens = estimateCompactionMessageTokens(msg);
       oversizedNotes.push(
         `[Large ${role} (~${Math.round(tokens / 1000)}K tokens) omitted from summary]`,
       );
@@ -306,7 +363,7 @@ export function buildStageSplitPlan(params: {
 }
 
 /** Drops oldest token-share chunks until history fits the requested context share. */
-export function pruneHistoryForContextShare(params: {
+function pruneHistoryForContextShare(params: {
   messages: AgentMessage[];
   maxContextTokens: number;
   maxHistoryShare?: number;
@@ -339,6 +396,9 @@ export function pruneHistoryForContextShare(params: {
       break;
     }
     const [dropped, ...rest] = chunks;
+    if (!dropped) {
+      break;
+    }
     const flatRest = rest.flat();
 
     // After dropping a chunk, repair tool_use/tool_result pairing to handle

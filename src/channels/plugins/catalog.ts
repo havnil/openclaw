@@ -52,6 +52,7 @@ export type ChannelPluginCatalogEntry = {
   pluginId?: string;
   origin?: PluginOrigin;
   trustedSourceLinkedOfficialInstall?: boolean;
+  channel?: PluginPackageChannel;
   meta: ChannelMeta;
   install: ChannelPluginCatalogInstall;
   installSource?: PluginInstallSourceInfo;
@@ -62,7 +63,10 @@ type CatalogOptions = {
   catalogPaths?: string[];
   officialCatalogPaths?: string[];
   env?: NodeJS.ProcessEnv;
+  extraPaths?: string[];
   excludeWorkspace?: boolean;
+  excludeOrigins?: PluginOrigin[];
+  excludePluginRefs?: Array<{ pluginId: string; origin?: PluginOrigin }>;
   installRecords?: Record<string, PluginInstallRecord>;
   discovery?: PluginDiscoveryResult;
 };
@@ -73,6 +77,31 @@ const ORIGIN_PRIORITY: Record<PluginOrigin, number> = {
   global: 2,
   bundled: 3,
 };
+
+function shouldExcludeCatalogOrigin(options: CatalogOptions, origin: PluginOrigin): boolean {
+  if (options.excludeWorkspace && origin === "workspace") {
+    return true;
+  }
+  return options.excludeOrigins?.includes(origin) ?? false;
+}
+
+function shouldExcludeCatalogPlugin(
+  options: CatalogOptions,
+  pluginId?: string,
+  origin?: PluginOrigin,
+): boolean {
+  const normalizedPluginId = normalizeOptionalString(pluginId);
+  if (!normalizedPluginId) {
+    return false;
+  }
+  return (
+    options.excludePluginRefs?.some(
+      (entry) =>
+        entry.pluginId === normalizedPluginId &&
+        (entry.origin === undefined || entry.origin === origin),
+    ) ?? false
+  );
+}
 
 const EXTERNAL_CATALOG_PRIORITY = ORIGIN_PRIORITY.bundled + 1;
 const FALLBACK_CATALOG_PRIORITY = EXTERNAL_CATALOG_PRIORITY + 1;
@@ -172,28 +201,6 @@ function loadCatalogEntriesFromPaths(
   return entries;
 }
 
-function loadOfficialCatalogEntriesFromPaths(paths: Iterable<string>): ExternalCatalogEntry[] {
-  const entries: ExternalCatalogEntry[] = [];
-  for (const resolvedPath of paths) {
-    const cached = officialCatalogEntriesByPath.get(resolvedPath);
-    if (cached !== undefined) {
-      if (cached) {
-        entries.push(...cached);
-      }
-      continue;
-    }
-    const payload = tryReadJsonSync(resolvedPath);
-    if (payload === null) {
-      officialCatalogEntriesByPath.set(resolvedPath, null);
-      continue;
-    }
-    const parsed = parseCatalogEntries(payload);
-    officialCatalogEntriesByPath.set(resolvedPath, parsed);
-    entries.push(...parsed);
-  }
-  return entries;
-}
-
 function resolveOfficialCatalogPaths(options: CatalogOptions): string[] {
   if (options.officialCatalogPaths && options.officialCatalogPaths.length > 0) {
     return normalizeStringEntries(options.officialCatalogPaths);
@@ -222,10 +229,12 @@ function resolveOfficialCatalogPaths(options: CatalogOptions): string[] {
 function loadOfficialCatalogEntries(options: CatalogOptions): ChannelPluginCatalogEntry[] {
   const builtInEntries = listOfficialExternalChannelCatalogEntries();
   const officialPaths = resolveOfficialCatalogPaths(options);
-  const fileEntries =
+  const fileEntries = loadCatalogEntriesFromPaths(
+    officialPaths,
     options.officialCatalogPaths && options.officialCatalogPaths.length > 0
-      ? loadCatalogEntriesFromPaths(officialPaths)
-      : loadOfficialCatalogEntriesFromPaths(officialPaths);
+      ? undefined
+      : officialCatalogEntriesByPath,
+  );
   return [...builtInEntries, ...fileEntries]
     .map((entry) => buildExternalCatalogEntry(entry, { trustedSourceLinkedOfficialInstall: true }))
     .filter((entry): entry is ChannelPluginCatalogEntry => Boolean(entry));
@@ -370,6 +379,7 @@ function buildCatalogEntryFromManifest(params: {
     ...(params.trustedSourceLinkedOfficialInstall
       ? { trustedSourceLinkedOfficialInstall: true }
       : {}),
+    channel: params.channel,
     meta,
     install,
     installSource: describePluginInstallSource(install, {
@@ -438,13 +448,23 @@ export function listRawChannelPluginCatalogEntries(
   const manifestEntries = listChannelCatalogEntries({
     workspaceDir: options.workspaceDir,
     env: options.env,
+    extraPaths: options.extraPaths,
     installRecords: options.installRecords,
     discovery: options.discovery,
   });
   const resolved = new Map<string, { entry: ChannelPluginCatalogEntry; priority: number }>();
+  const rememberCatalogEntry = (entry: ChannelPluginCatalogEntry, priority: number) => {
+    const existing = resolved.get(entry.id);
+    if (!existing || priority < existing.priority) {
+      resolved.set(entry.id, { entry, priority });
+    }
+  };
 
   for (const candidate of manifestEntries) {
-    if (options.excludeWorkspace && candidate.origin === "workspace") {
+    if (
+      shouldExcludeCatalogOrigin(options, candidate.origin) ||
+      shouldExcludeCatalogPlugin(options, candidate.pluginId, candidate.origin)
+    ) {
       continue;
     }
     const entry = buildCatalogEntryFromManifest({
@@ -459,19 +479,11 @@ export function listRawChannelPluginCatalogEntries(
     if (!entry) {
       continue;
     }
-    const priority = ORIGIN_PRIORITY[candidate.origin] ?? 99;
-    const existing = resolved.get(entry.id);
-    if (!existing || priority < existing.priority) {
-      resolved.set(entry.id, { entry, priority });
-    }
+    rememberCatalogEntry(entry, ORIGIN_PRIORITY[candidate.origin] ?? 99);
   }
 
   for (const entry of loadOfficialCatalogEntries(options)) {
-    const priority = FALLBACK_CATALOG_PRIORITY;
-    const existing = resolved.get(entry.id);
-    if (!existing || priority < existing.priority) {
-      resolved.set(entry.id, { entry, priority });
-    }
+    rememberCatalogEntry(entry, FALLBACK_CATALOG_PRIORITY);
   }
 
   const externalEntries = loadExternalCatalogEntries(options)
@@ -480,11 +492,7 @@ export function listRawChannelPluginCatalogEntries(
   for (const entry of externalEntries) {
     // External catalogs are the supported override seam for shipped fallback
     // metadata, but discovered plugins should still win when they are present.
-    const priority = EXTERNAL_CATALOG_PRIORITY;
-    const existing = resolved.get(entry.id);
-    if (!existing || priority < existing.priority) {
-      resolved.set(entry.id, { entry, priority });
-    }
+    rememberCatalogEntry(entry, EXTERNAL_CATALOG_PRIORITY);
   }
 
   return Array.from(resolved.values())
@@ -497,17 +505,6 @@ export function listRawChannelPluginCatalogEntries(
       }
       return a.meta.label.localeCompare(b.meta.label);
     });
-}
-
-/**
- * @deprecated Use `listTrustedChannelPluginCatalogEntries` for execution-facing
- * paths, or `listRawChannelPluginCatalogEntries` for internal plumbing
- * that applies its own trust filtering.
- */
-export function listChannelPluginCatalogEntries(
-  options: CatalogOptions = {},
-): ChannelPluginCatalogEntry[] {
-  return listRawChannelPluginCatalogEntries(options);
 }
 
 export function getChannelPluginCatalogEntry(

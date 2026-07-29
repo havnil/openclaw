@@ -2,17 +2,26 @@
 import "./test-helpers.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createAcceptedWhatsAppSendResult,
-  installWebAutoReplyUnitTestHooks,
-  makeSessionStore,
-} from "./auto-reply.test-harness.js";
+import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
 import { buildMentionConfig } from "./auto-reply/mentions.js";
 import { createEchoTracker } from "./auto-reply/monitor/echo.js";
-import { awaitBackgroundTasks } from "./auto-reply/monitor/last-route.js";
 import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
+import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
 const updateLastRouteInBackgroundMock = vi.hoisted(() => vi.fn());
+const runChannelInboundEventMock = vi.hoisted(() =>
+  vi.fn(async () => ({ dispatched: false }) as never),
+);
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  return {
+    ...actual,
+    runChannelInboundEvent: runChannelInboundEventMock,
+  };
+});
 
 vi.mock("./auto-reply/monitor/last-route.js", async () => {
   const actual = await vi.importActual<typeof import("./auto-reply/monitor/last-route.js")>(
@@ -78,23 +87,32 @@ function buildInboundMessage(params: {
   senderName?: string;
   selfE164?: string;
 }) {
-  return {
-    id: params.id,
-    from: params.from,
-    conversationId: params.conversationId,
-    to: params.to ?? "+2000",
-    body: params.body ?? "hello",
-    timestamp: params.timestamp,
-    chatType: params.chatType,
-    chatId: params.chatId,
-    accountId: params.accountId ?? "default",
-    senderE164: params.senderE164,
-    senderName: params.senderName,
-    selfE164: params.selfE164,
-    sendComposing: vi.fn().mockResolvedValue(undefined),
-    reply: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1")),
-    sendMedia: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1")),
-  };
+  return createTestWebInboundMessage({
+    event: {
+      id: params.id,
+      timestamp: params.timestamp,
+    },
+    payload: {
+      body: params.body ?? "hello",
+    },
+    platform: {
+      chatJid: params.chatId,
+      recipientJid: params.to ?? "+2000",
+      senderE164: params.senderE164,
+      senderName: params.senderName,
+      selfE164: params.selfE164,
+    },
+    admission: {
+      accountId: params.accountId ?? "default",
+      conversation: {
+        kind: params.chatType,
+        id: params.conversationId,
+      },
+      sender: {
+        id: params.senderE164 ?? params.from,
+      },
+    },
+  });
 }
 
 describe("web auto-reply last-route", () => {
@@ -102,6 +120,7 @@ describe("web auto-reply last-route", () => {
 
   beforeEach(() => {
     updateLastRouteInBackgroundMock.mockClear();
+    runChannelInboundEventMock.mockClear();
   });
 
   it("updates last-route for direct chats without senderE164", async () => {
@@ -128,7 +147,8 @@ describe("web auto-reply last-route", () => {
       }),
     );
 
-    await awaitBackgroundTasks(backgroundTasks);
+    await Promise.allSettled(backgroundTasks);
+    backgroundTasks.clear();
 
     expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
     const updateParams = updateLastRouteInBackgroundMock.mock.calls.at(0)?.[0] as
@@ -196,6 +216,7 @@ describe("web auto-reply last-route", () => {
         conversationId: "123@g.us",
         chatType: "group",
         chatId: "123@g.us",
+        body: "hello +2000",
         timestamp: now,
         accountId: "work",
         senderE164: "+1000",
@@ -204,7 +225,8 @@ describe("web auto-reply last-route", () => {
       }),
     );
 
-    await awaitBackgroundTasks(backgroundTasks);
+    await Promise.allSettled(backgroundTasks);
+    backgroundTasks.clear();
 
     expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
     const updateParams = updateLastRouteInBackgroundMock.mock.calls.at(0)?.[0] as

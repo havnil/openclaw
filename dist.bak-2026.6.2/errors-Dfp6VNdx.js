@@ -1,0 +1,8 @@
+import { s as redactSensitiveText } from "./redact-BU5gVu-D.js";
+import { s as configureAcpErrorRedactor } from "./errors-B_W4aC5J.js";
+import "./src-L6Lb1zY2.js";
+//#region src/acp/runtime/errors.ts
+/** ACP runtime error exports wired to OpenClaw secret redaction. */
+configureAcpErrorRedactor(redactSensitiveText);
+//#endregion
+export {};

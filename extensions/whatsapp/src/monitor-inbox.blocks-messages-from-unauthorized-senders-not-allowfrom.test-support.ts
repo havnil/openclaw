@@ -1,6 +1,7 @@
 // Whatsapp plugin module implements monitor inbox.blocks messages from unauthorized senders not allowfrom support behavior.
 import "./monitor-inbox.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
+import type { WebInboundMessage } from "./inbound/types.js";
 import {
   DEFAULT_ACCOUNT_ID,
   expectPairingPromptSent,
@@ -88,13 +89,13 @@ function firstInboundPayload(onMessage: ReturnType<typeof vi.fn>) {
   if (!payload || typeof payload !== "object") {
     throw new Error("expected first inbound payload");
   }
-  return payload as Record<string, unknown>;
+  return payload as WebInboundMessage;
 }
 
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
-  it("blocks messages from unauthorized senders not in allowFrom", async () => {
+  it("delivery coordinator blocks unauthorized senders outside allowFrom", async () => {
     // Test for auto-recovery fix: early allowFrom filtering prevents Bad MAC errors
     // from unauthorized senders corrupting sessions
     const config = {
@@ -132,7 +133,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("applies hot-reloaded dmPolicy allowlist to the active listener", async () => {
+  it("delivery coordinator applies hot-reloaded dmPolicy to the active listener", async () => {
     const startupConfig = {
       channels: {
         whatsapp: {
@@ -178,7 +179,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("skips read receipts in self-chat mode", async () => {
+  it("delivery coordinator skips read receipts in self-chat mode", async () => {
     const config = {
       channels: {
         whatsapp: {
@@ -208,10 +209,20 @@ describe("web monitor inbox", () => {
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        from: "+123",
-        to: "+123",
-        body: "self ping",
-        accessControlPassed: true,
+        admission: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "+123",
+          }),
+          ingress: expect.objectContaining({
+            decision: "allow",
+          }),
+        }),
+        payload: expect.objectContaining({
+          body: "self ping",
+        }),
+        platform: expect.objectContaining({
+          recipientJid: "+123",
+        }),
       }),
     );
     expect(sock.readMessages).not.toHaveBeenCalled();
@@ -219,7 +230,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("skips read receipts when disabled", async () => {
+  it("delivery coordinator skips read receipts when disabled", async () => {
     const { onMessage, listener, sock } = await startWebInboxMonitor({
       sendReadReceipts: false,
     });
@@ -262,8 +273,8 @@ describe("web monitor inbox", () => {
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     const payload = firstInboundPayload(onMessage);
-    expect(payload.chatType).toBe("group");
-    expect(payload.senderE164).toBe("+999");
+    expect(payload.admission?.conversation.kind).toBe("group");
+    expect(payload.platform.senderE164).toBe("+999");
 
     await listener.close();
   });
@@ -350,8 +361,8 @@ describe("web monitor inbox", () => {
     // Should call onMessage because sender is in groupAllowFrom
     expect(onMessage).toHaveBeenCalledTimes(1);
     const payload = firstInboundPayload(onMessage);
-    expect(payload.chatType).toBe("group");
-    expect(payload.senderE164).toBe("+15551234567");
+    expect(payload.admission?.conversation.kind).toBe("group");
+    expect(payload.platform.senderE164).toBe("+15551234567");
 
     await listener.close();
   });
@@ -384,7 +395,7 @@ describe("web monitor inbox", () => {
     // Should call onMessage because wildcard allows all senders
     expect(onMessage).toHaveBeenCalledTimes(1);
     const payload = firstInboundPayload(onMessage);
-    expect(payload.chatType).toBe("group");
+    expect(payload.admission?.conversation.kind).toBe("group");
 
     await listener.close();
   });

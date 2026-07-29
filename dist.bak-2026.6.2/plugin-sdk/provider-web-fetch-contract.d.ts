@@ -1,0 +1,3 @@
+import { Hs as WebFetchProviderPlugin } from "../types-BJ3mu3UU.js";
+import { t as enablePluginInConfig } from "../provider-enable-config-Boz7XZ64.js";
+export { type WebFetchProviderPlugin, enablePluginInConfig };

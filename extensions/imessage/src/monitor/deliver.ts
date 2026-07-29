@@ -6,7 +6,6 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { IMessageRpcClient } from "../client.js";
 import { sendMessageIMessage } from "../send.js";
 import {
   chunkTextWithMode,
@@ -21,15 +20,13 @@ export async function deliverReplies(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
-  client: IMessageRpcClient;
   accountId?: string;
   runtime: RuntimeEnv;
   maxBytes: number;
   textLimit: number;
   sentMessageCache?: Pick<SentMessageCache, "remember">;
 }) {
-  const { replies, target, client, runtime, maxBytes, textLimit, accountId, sentMessageCache } =
-    params;
+  const { replies, target, runtime, maxBytes, textLimit, accountId, sentMessageCache } = params;
   const scope = `${accountId ?? ""}:${target}`;
   const { cfg } = params;
   const tableMode = resolveMarkdownTableMode({
@@ -51,12 +48,13 @@ export async function deliverReplies(params: {
         const sent = await sendMessageIMessage(target, chunk, {
           config: params.cfg,
           maxBytes,
-          client,
           accountId,
           replyToId: payload.replyToId,
         });
+        const echoText = sent.echoText ?? sent.sentText;
         sentMessageCache?.remember(scope, {
-          text: sent.echoText ?? sent.sentText,
+          ...(echoText ? { text: echoText } : {}),
+          ...(sent.echoMedia ? { media: sent.echoMedia } : {}),
           messageId: sent.messageId,
         });
       },
@@ -65,12 +63,13 @@ export async function deliverReplies(params: {
           config: params.cfg,
           mediaUrl,
           maxBytes,
-          client,
           accountId,
           replyToId: payload.replyToId,
         });
+        const echoText = sent.echoText ?? (sent.sentText || undefined);
         sentMessageCache?.remember(scope, {
-          text: sent.echoText ?? (sent.sentText || undefined),
+          ...(echoText ? { text: echoText } : {}),
+          ...(sent.echoMedia ? { media: sent.echoMedia } : {}),
           messageId: sent.messageId,
         });
       },
@@ -82,19 +81,17 @@ export async function deliverReplies(params: {
 }
 
 export function createIMessageEchoCachingSend(params: {
-  client: IMessageRpcClient;
   accountId?: string;
   sentMessageCache?: Pick<SentMessageCache, "remember">;
 }): typeof sendMessageIMessage {
   return async (target, text, opts) => {
     const sanitizedText = sanitizeOutboundText(text);
-    const sent = await sendMessageIMessage(target, sanitizedText, {
-      ...opts,
-      client: params.client,
-    });
+    const sent = await sendMessageIMessage(target, sanitizedText, opts);
     const scope = `${params.accountId ?? opts.accountId ?? ""}:${target}`;
+    const echoText = sent.echoText ?? (sent.sentText || undefined);
     params.sentMessageCache?.remember(scope, {
-      text: sent.echoText ?? (sent.sentText || undefined),
+      ...(echoText ? { text: echoText } : {}),
+      ...(sent.echoMedia ? { media: sent.echoMedia } : {}),
       messageId: sent.messageId,
     });
     return sent;

@@ -2,23 +2,84 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveLegacyOAuthPath } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
+  CONFIG_PATH,
   DEFAULT_GATEWAY_PORT,
+  isDefaultInstallIdentity,
+  isDefaultStateDir,
+  isNixMode,
   normalizeStateDirEnv,
+  pinRuntimePaths,
   resolveDefaultConfigCandidates,
   resolveConfigPathCandidate,
   resolveConfigPath,
   resolveGatewayPort,
   resolveIncludeRoots,
   resolveOAuthDir,
-  resolveOAuthPath,
   resolveStateDir,
+  STATE_DIR,
 } from "./paths.js";
 
 function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
   return { ...overrides };
 }
+
+describe("default state directory", () => {
+  it("matches filesystem aliases of the default state directory", async () => {
+    await withTempDir({ prefix: "openclaw-default-state-" }, async (root) => {
+      const home = path.join(root, "home");
+      const defaultStateDir = path.join(home, ".openclaw");
+      const stateAlias = path.join(home, "state-alias");
+      await fs.mkdir(defaultStateDir, { recursive: true });
+      await fs.symlink(defaultStateDir, stateAlias, "dir");
+
+      expect(isDefaultStateDir({ HOME: home, OPENCLAW_STATE_DIR: stateAlias }, () => home)).toBe(
+        true,
+      );
+    });
+  });
+});
+
+describe("default install identity", () => {
+  it("accepts default paths and equivalent explicit overrides", () => {
+    const home = "/home/test";
+    const stateDir = path.join(home, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+
+    expect(isDefaultInstallIdentity({ HOME: home }, () => home)).toBe(true);
+    expect(
+      isDefaultInstallIdentity(
+        { HOME: home, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+        () => home,
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects non-default state or config paths", () => {
+    const home = "/home/test";
+
+    expect(
+      isDefaultInstallIdentity({ HOME: home, OPENCLAW_STATE_DIR: "/tmp/copied-state" }, () => home),
+    ).toBe(false);
+    expect(
+      isDefaultInstallIdentity(
+        { HOME: home, OPENCLAW_CONFIG_PATH: "/tmp/copied-openclaw.json" },
+        () => home,
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects process home overrides that relocate the implicit install", () => {
+    const accountHome = "/home/test";
+
+    expect(isDefaultInstallIdentity({ HOME: "/tmp/copied-home" }, () => accountHome)).toBe(false);
+    expect(isDefaultInstallIdentity({ OPENCLAW_HOME: "/tmp/copied-home" }, () => accountHome)).toBe(
+      false,
+    );
+  });
+});
 
 describe("oauth paths", () => {
   it("prefers OPENCLAW_OAUTH_DIR over OPENCLAW_STATE_DIR", () => {
@@ -28,7 +89,7 @@ describe("oauth paths", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveOAuthDir(env, "/custom/state")).toBe(path.resolve("/custom/oauth"));
-    expect(resolveOAuthPath(env, "/custom/state")).toBe(
+    expect(resolveLegacyOAuthPath(env)).toBe(
       path.join(path.resolve("/custom/oauth"), "oauth.json"),
     );
   });
@@ -39,7 +100,7 @@ describe("oauth paths", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveOAuthDir(env, "/custom/state")).toBe(path.join("/custom/state", "credentials"));
-    expect(resolveOAuthPath(env, "/custom/state")).toBe(
+    expect(resolveLegacyOAuthPath(env)).toBe(
       path.join("/custom/state", "credentials", "oauth.json"),
     );
   });
@@ -165,6 +226,37 @@ describe("state + config path candidates", () => {
 
     expect(normalized).toBe(path.resolve("relative-state"));
     expect(resolveStateDir(env, () => "/srv/other-home")).toBe(normalized);
+  });
+
+  it("re-pins exported runtime paths after startup environment selection", () => {
+    const originalConfigPath = CONFIG_PATH;
+    const originalNixMode = isNixMode;
+    const originalStateDir = STATE_DIR;
+    const selectedStateDir = path.resolve("/tmp/openclaw-selected-runtime-state");
+    const selectedConfigPath = path.join(selectedStateDir, "selected.json");
+    try {
+      const pinned = pinRuntimePaths({
+        OPENCLAW_CONFIG_PATH: selectedConfigPath,
+        OPENCLAW_NIX_MODE: "1",
+        OPENCLAW_STATE_DIR: selectedStateDir,
+        OPENCLAW_TEST_FAST: "1",
+      });
+
+      expect(pinned).toEqual({
+        configPath: selectedConfigPath,
+        stateDir: selectedStateDir,
+      });
+      expect(CONFIG_PATH).toBe(selectedConfigPath);
+      expect(isNixMode).toBe(true);
+      expect(STATE_DIR).toBe(selectedStateDir);
+    } finally {
+      pinRuntimePaths({
+        OPENCLAW_CONFIG_PATH: originalConfigPath,
+        OPENCLAW_NIX_MODE: originalNixMode ? "1" : undefined,
+        OPENCLAW_STATE_DIR: originalStateDir,
+        OPENCLAW_TEST_FAST: "1",
+      });
+    }
   });
 
   it("uses OPENCLAW_HOME for default state/config locations", () => {

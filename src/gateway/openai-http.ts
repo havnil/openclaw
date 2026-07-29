@@ -3,11 +3,11 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
@@ -34,20 +34,36 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
-import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
+import {
+  isReplaceableAssistantStreamEvent,
+  resolveAssistantStreamDeltaText,
+  resolveAssistantStreamSnapshotText,
+} from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
+  IMAGE_ONLY_USER_MESSAGE,
 } from "./agent-prompt.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, setSseHeaders, watchClientDisconnect, writeDone } from "./http-common.js";
+import {
+  sendJson,
+  sendMissingScopeForbidden,
+  setSseHeaders,
+  watchClientDisconnect,
+  writeDone,
+} from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
+  authorizeOpenAiCompatibleHttpModelOverride,
+  isGatewaySessionKeyOverrideError,
+  isUnknownGatewayAgentError,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
   resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
@@ -97,7 +113,6 @@ type OpenAiChatCompletionRequest = {
 };
 
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
-const IMAGE_ONLY_USER_MESSAGE = "User sent image(s) with no text.";
 const DEFAULT_OPENAI_MAX_IMAGE_PARTS = 8;
 const DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
 const DEFAULT_OPENAI_IMAGE_LIMITS: InputImageLimits = {
@@ -120,15 +135,9 @@ function resolveOpenAiChatCompletionsLimits(
 ): ResolvedOpenAiChatCompletionsLimits {
   const imageConfig = config?.images;
   return {
-    maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
-    maxImageParts: resolveIntegerOption(config?.maxImageParts, DEFAULT_OPENAI_MAX_IMAGE_PARTS, {
-      min: 0,
-    }),
-    maxTotalImageBytes: resolveIntegerOption(
-      config?.maxTotalImageBytes,
-      DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
-      { min: 1 },
-    ),
+    maxBodyBytes: DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
+    maxImageParts: DEFAULT_OPENAI_MAX_IMAGE_PARTS,
+    maxTotalImageBytes: DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
     images: {
       allowUrl: imageConfig?.allowUrl ?? DEFAULT_OPENAI_IMAGE_LIMITS.allowUrl,
       urlAllowlist: normalizeInputHostnameAllowlist(imageConfig?.urlAllowlist),
@@ -151,6 +160,7 @@ function buildAgentCommandInput(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  senderIsOwner: boolean;
   abortSignal?: AbortSignal;
   streamParams?: AgentStreamParams;
 }) {
@@ -164,8 +174,9 @@ function buildAgentCommandInput(params: {
     runId: params.runId,
     deliver: false as const,
     messageChannel: params.messageChannel,
+    senderIsOwner: params.senderIsOwner,
     bestEffortDeliver: false as const,
-    allowModelOverride: true as const,
+    allowModelOverride: params.modelOverride !== undefined,
     abortSignal: params.abortSignal,
     streamParams: params.streamParams,
   };
@@ -272,7 +283,7 @@ function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; m
 
 function writeAssistantContentChunk(
   res: ServerResponse,
-  params: { runId: string; model: string; content: string; finishReason: "stop" | null },
+  params: { runId: string; model: string; content: string },
 ) {
   writeSse(res, {
     id: params.runId,
@@ -283,7 +294,7 @@ function writeAssistantContentChunk(
       {
         index: 0,
         delta: { content: params.content },
-        finish_reason: params.finishReason,
+        finish_reason: null,
       },
     ],
   });
@@ -314,8 +325,14 @@ function splitArgumentsForStreaming(argumentsValue: string): string[] {
   }
   const chunkSize = 256;
   const chunks: string[] = [];
-  for (let i = 0; i < argumentsValue.length; i += chunkSize) {
-    chunks.push(argumentsValue.slice(i, i + chunkSize));
+  for (let start = 0; start < argumentsValue.length;) {
+    const end = avoidTrailingHighSurrogateBreak(
+      argumentsValue,
+      start,
+      Math.min(start + chunkSize, argumentsValue.length),
+    );
+    chunks.push(argumentsValue.slice(start, end));
+    start = end;
   }
   return chunks.length > 0 ? chunks : [""];
 }
@@ -619,7 +636,6 @@ export const testOnlyOpenAiHttp = {
   resolveOpenAiChatCompletionsLimits,
   resolveChatCompletionUsage,
 };
-export { testOnlyOpenAiHttp as __testOnlyOpenAiHttp };
 
 function buildAgentPrompt(
   messagesUnknown: unknown,
@@ -886,6 +902,12 @@ export async function handleOpenAiHttpRequest(
   if (!handled) {
     return true;
   }
+  const modelOverrideAuth = authorizeOpenAiCompatibleHttpModelOverride(req, handled.requestAuth);
+  if (!modelOverrideAuth.allowed) {
+    sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
+    return true;
+  }
+  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
   const payload = coerceRequest(handled.body);
   const stream = Boolean(payload.stream);
   const streamIncludeUsage = stream && resolveIncludeUsageForStreaming(payload);
@@ -962,14 +984,27 @@ export async function handleOpenAiHttpRequest(
         }
       : undefined;
 
-  const { agentId, sessionKey, messageChannel } = resolveGatewayRequestContext({
-    req,
-    model,
-    user,
-    sessionPrefix: "openai",
-    defaultMessageChannel: "webchat",
-    useMessageChannelHeader: true,
-  });
+  let agentId: string;
+  let sessionKey: string;
+  let messageChannel: string;
+  try {
+    ({ agentId, sessionKey, messageChannel } = resolveGatewayRequestContext({
+      req,
+      model,
+      user,
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+      useMessageChannelHeader: true,
+    }));
+  } catch (err) {
+    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
+      sendJson(res, 400, {
+        error: { message: err.message, type: "invalid_request_error" },
+      });
+      return true;
+    }
+    throw err;
+  }
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
     agentId,
@@ -1045,6 +1080,7 @@ export async function handleOpenAiHttpRequest(
     sessionKey,
     runId,
     messageChannel,
+    senderIsOwner,
     abortSignal: abortController.signal,
     streamParams,
   });
@@ -1153,16 +1189,19 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
+  let streamedAssistantText = "";
   let bufferedAssistantContent = "";
+  let bufferedReplaceableAssistantContent = "";
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
+  let finalizeScheduled = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
   let resultResolved = false;
   let closed = false;
   let stopWatchingDisconnect = () => {};
 
   const maybeFinalize = () => {
-    if (closed || !finalizeRequested) {
+    if (closed || finalizeScheduled || !finalizeRequested) {
       return;
     }
     if (!resultResolved) {
@@ -1171,22 +1210,32 @@ export async function handleOpenAiHttpRequest(
     if (streamIncludeUsage && !finalUsage) {
       return;
     }
-    closed = true;
-    stopWatchingDisconnect();
-    unsubscribe();
-    if (!wroteStopChunk) {
-      writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
-      wroteStopChunk = true;
-    }
-    if (streamIncludeUsage && finalUsage) {
-      writeUsageChunk(res, { runId, model, usage: finalUsage });
-    }
-    writeDone(res);
-    res.end();
+    // Agent text_end flushes run in a microtask. Keep the stream subscribed
+    // until those same-turn deltas arrive, then emit exactly one terminal frame.
+    finalizeScheduled = true;
+    queueMicrotask(() => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      stopWatchingDisconnect();
+      unsubscribe();
+      if (!wroteStopChunk) {
+        writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
+        wroteStopChunk = true;
+      }
+      if (streamIncludeUsage && finalUsage) {
+        writeUsageChunk(res, { runId, model, usage: finalUsage });
+      }
+      writeDone(res);
+      res.end();
+    });
   };
 
   const requestFinalize = (finishReason: "stop" | "tool_calls" = "stop") => {
-    finalizeFinishReason = finishReason;
+    if (!finalizeRequested || finishReason === "tool_calls") {
+      finalizeFinishReason = finishReason;
+    }
     finalizeRequested = true;
     maybeFinalize();
   };
@@ -1200,10 +1249,30 @@ export async function handleOpenAiHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const content = resolveAssistantStreamDeltaText(evt) ?? "";
+      const text = evt.data?.text;
+      const replace = evt.data?.replace === true;
+      if (replace && typeof text === "string") {
+        bufferedReplaceableAssistantContent = text;
+      }
+
+      if (isReplaceableAssistantStreamEvent(evt)) {
+        const snapshot = resolveAssistantStreamSnapshotText(evt);
+        if (snapshot) {
+          bufferedReplaceableAssistantContent = snapshot;
+        }
+        return;
+      }
+
+      // Snapshots include prefixes held during tag-boundary filtering; the raw
+      // delta alone can omit a literal leading less-than.
+      const content =
+        typeof text === "string" && text.startsWith(streamedAssistantText)
+          ? text.slice(streamedAssistantText.length)
+          : resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
       }
+      streamedAssistantText += content;
 
       // Hold prose until the run proves the requested client-tool call exists.
       // If the provider ignores `tool_choice`, no partial text should leak
@@ -1223,7 +1292,6 @@ export async function handleOpenAiHttpRequest(
         runId,
         model,
         content,
-        finishReason: null,
       });
       return;
     }
@@ -1244,6 +1312,10 @@ export async function handleOpenAiHttpRequest(
   wroteRole = true;
   writeAssistantRoleChunk(res, { runId, model });
 
+  // The streamed run outlives this handler, whose root-work admission is
+  // released on return. Without retaining it, subordinate session/lane
+  // admissions inherit a released lease and fail as GatewayDrainingError.
+  const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
   void (async () => {
     try {
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
@@ -1287,14 +1359,16 @@ export async function handleOpenAiHttpRequest(
           writeAssistantRoleChunk(res, { runId, model });
         }
         if (!sawAssistantDelta) {
-          const commentary = bufferedAssistantContent || resolveAgentResponseCommentary(result);
+          const commentary =
+            bufferedAssistantContent ||
+            resolveAgentResponseCommentary(result) ||
+            bufferedReplaceableAssistantContent;
           if (commentary) {
             sawAssistantDelta = true;
             writeAssistantContentChunk(res, {
               runId,
               model,
               content: commentary,
-              finishReason: null,
             });
           }
         }
@@ -1313,14 +1387,17 @@ export async function handleOpenAiHttpRequest(
           writeAssistantRoleChunk(res, { runId, model });
         }
 
-        const content = resolveAgentResponseText(result);
+        const content =
+          resolveAgentResponseCommentary(result) ||
+          bufferedReplaceableAssistantContent ||
+          resolveAgentResponseText(result) ||
+          "No response from OpenClaw.";
 
         sawAssistantDelta = true;
         writeAssistantContentChunk(res, {
           runId,
           model,
           content,
-          finishReason: null,
         });
       }
       requestFinalize();
@@ -1356,9 +1433,7 @@ export async function handleOpenAiHttpRequest(
         runId,
         model,
         content,
-        finishReason: "stop",
       });
-      wroteStopChunk = true;
       finalUsage = {
         prompt_tokens: 0,
         completion_tokens: 0,
@@ -1371,6 +1446,7 @@ export async function handleOpenAiHttpRequest(
       });
       requestFinalize();
     } finally {
+      releaseRootWork?.();
       if (!closed) {
         emitAgentEvent({
           runId,
@@ -1383,3 +1459,4 @@ export async function handleOpenAiHttpRequest(
 
   return true;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

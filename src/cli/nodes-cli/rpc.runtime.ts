@@ -12,16 +12,47 @@ import type { NodesRpcOpts } from "./types.js";
 const NODE_PAIR_APPROVAL_GATEWAY_METHODS = new Set<string>(["node.pair.list", "node.pair.approve"]);
 const DEFAULT_NODES_RPC_TIMEOUT_MS = 10_000;
 
-function resolveNodesTransportTimeoutMs(opts: NodesRpcOpts, overrideMs?: number): number {
-  return overrideMs ?? parseTimeoutMsWithFallback(opts.timeout, DEFAULT_NODES_RPC_TIMEOUT_MS);
+function resolveNodesTransportTimeoutMs(
+  opts: NodesRpcOpts,
+  overrideMs?: number,
+  invokeTimeoutMs?: unknown,
+): number | null {
+  const transportTimeoutMs =
+    overrideMs ?? parseTimeoutMsWithFallback(opts.timeout, DEFAULT_NODES_RPC_TIMEOUT_MS);
+  if (invokeTimeoutMs === 0) {
+    // Zero disables the node deadline; null keeps Gateway startup bounded but the request unbounded.
+    return null;
+  }
+  if (
+    typeof invokeTimeoutMs !== "number" ||
+    !Number.isSafeInteger(invokeTimeoutMs) ||
+    invokeTimeoutMs <= 0
+  ) {
+    return transportTimeoutMs;
+  }
+  // Gateway transport starts before the node timer; retain one normal RPC timeout for forwarding.
+  return Math.max(transportTimeoutMs, invokeTimeoutMs + DEFAULT_NODES_RPC_TIMEOUT_MS);
 }
 
 export async function callGatewayCliRuntime(
   method: string,
   opts: NodesRpcOpts,
   params?: unknown,
-  callOpts?: { transportTimeoutMs?: number },
+  callOpts?: {
+    scopes?: OperatorScope[];
+    transportTimeoutMs?: number;
+    useStoredDeviceAuth?: boolean;
+    requiredStoredDeviceAuthScopes?: OperatorScope[];
+    useLocalBackendSharedAuth?: boolean;
+  },
 ) {
+  const invokeTimeoutMs =
+    method === "node.invoke" &&
+    params !== null &&
+    typeof params === "object" &&
+    !Array.isArray(params)
+      ? (params as { timeoutMs?: unknown }).timeoutMs
+      : undefined;
   // Progress is suppressed for JSON callers so stdout remains structured.
   return await withProgress(
     {
@@ -35,9 +66,21 @@ export async function callGatewayCliRuntime(
         token: opts.token,
         method,
         params,
-        timeoutMs: resolveNodesTransportTimeoutMs(opts, callOpts?.transportTimeoutMs),
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
+        scopes: callOpts?.scopes,
+        useStoredDeviceAuth: callOpts?.useStoredDeviceAuth,
+        requiredStoredDeviceAuthScopes: callOpts?.requiredStoredDeviceAuthScopes,
+        requireLocalBackendSharedAuth: callOpts?.useLocalBackendSharedAuth,
+        timeoutMs: resolveNodesTransportTimeoutMs(
+          opts,
+          callOpts?.transportTimeoutMs,
+          invokeTimeoutMs,
+        ),
+        clientName: callOpts?.useLocalBackendSharedAuth
+          ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+          : GATEWAY_CLIENT_NAMES.CLI,
+        mode: callOpts?.useLocalBackendSharedAuth
+          ? GATEWAY_CLIENT_MODES.BACKEND
+          : GATEWAY_CLIENT_MODES.CLI,
       }),
   );
 }

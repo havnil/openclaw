@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
+import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
 
 describe("describeHeartbeatSessionTargetIssues", () => {
@@ -16,6 +17,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
   });
 
   afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -62,17 +64,29 @@ describe("describeHeartbeatSessionTargetIssues", () => {
 
   function writeStore(cfg: OpenClawConfig, entries: Record<string, unknown>) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
-    writeSessionStoreForTest(storePath, entries);
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(storePath, JSON.stringify(entries, null, 2));
   }
 
   it("uses runtime session canonicalization before warning", () => {
     const cfg = cfgWithSession("agent:ops:main");
     writeStore(cfg, {
       "agent:ops:work": {
-        sessionId: "agent:ops:work",
+        sessionId: "work-session",
         updatedAt: Date.now(),
       },
     });
+
+    expect(describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
+  });
+
+  it("recognizes a SQLite-resident heartbeat target", async () => {
+    const cfg = cfgWithSession("slack:channel:c123");
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
+    await upsertSessionEntry(
+      { agentId: "ops", sessionKey: "agent:ops:slack:channel:c123", storePath },
+      { sessionId: "sqlite-heartbeat-target", updatedAt: Date.now() },
+    );
 
     expect(describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
   });
