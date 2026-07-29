@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile, readdir, mkdir, rm } from "node:fs/promises";
+import { readFile, writeFile, readdir, mkdir, rm, rename } from "node:fs/promises";
 import { join } from "node:path";
 import type { StoredMessage, ConversationSummary } from "./protocol.js";
 
@@ -13,6 +13,11 @@ export interface Conversation {
 }
 
 export class ConversationStore {
+  // Per-conversation write-lock chain: prevents concurrent read-modify-write
+  // calls from clobbering each other (or producing concatenated-garbage files
+  // when two writes truncate-and-write the same path in overlap).
+  private readonly writeLocks = new Map<string, Promise<unknown>>();
+
   constructor(private readonly baseDir: string) {}
 
   private userDir(userId: string): string {
@@ -21,6 +26,28 @@ export class ConversationStore {
 
   private convPath(userId: string, convId: string): string {
     return join(this.userDir(userId), `${convId}.json`);
+  }
+
+  private async withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.writeLocks.get(key) ?? Promise.resolve();
+    const next = prev.then(fn, fn); // run regardless of prior outcome
+    this.writeLocks.set(key, next);
+    try {
+      return await next;
+    } finally {
+      if (this.writeLocks.get(key) === next) {
+        this.writeLocks.delete(key);
+      }
+    }
+  }
+
+  // Atomic write: temp-file + rename. POSIX rename within the same filesystem
+  // is atomic, so readers always see the old file or the new one — never a
+  // half-written byte stream.
+  private async atomicWrite(path: string, data: string): Promise<void> {
+    const tmp = `${path}.tmp.${randomUUID()}`;
+    await writeFile(tmp, data);
+    await rename(tmp, path);
   }
 
   async create(userId: string): Promise<Conversation> {
@@ -35,7 +62,7 @@ export class ConversationStore {
       messages: [],
     };
     await mkdir(this.userDir(userId), { recursive: true });
-    await writeFile(this.convPath(userId, id), JSON.stringify(conv, null, 2));
+    await this.atomicWrite(this.convPath(userId, id), JSON.stringify(conv, null, 2));
     return conv;
   }
 
@@ -83,34 +110,40 @@ export class ConversationStore {
   }
 
   async appendMessage(convId: string, userId: string, message: StoredMessage): Promise<void> {
-    const conv = await this.load(convId, userId);
-    if (!conv) {
-      return;
-    }
-    conv.messages.push(message);
-    conv.updated_at = new Date().toISOString();
-    await writeFile(this.convPath(userId, convId), JSON.stringify(conv, null, 2));
+    await this.withLock(`${userId}/${convId}`, async () => {
+      const conv = await this.load(convId, userId);
+      if (!conv) {
+        return;
+      }
+      conv.messages.push(message);
+      conv.updated_at = new Date().toISOString();
+      await this.atomicWrite(this.convPath(userId, convId), JSON.stringify(conv, null, 2));
+    });
   }
 
   async delete(convId: string, userId: string): Promise<void> {
-    const conv = await this.load(convId, userId);
-    if (!conv) {
-      return;
-    }
-    try {
-      await rm(this.convPath(userId, convId));
-    } catch {
-      // already gone
-    }
+    await this.withLock(`${userId}/${convId}`, async () => {
+      const conv = await this.load(convId, userId);
+      if (!conv) {
+        return;
+      }
+      try {
+        await rm(this.convPath(userId, convId));
+      } catch {
+        // already gone
+      }
+    });
   }
 
   async rename(convId: string, userId: string, title: string): Promise<void> {
-    const conv = await this.load(convId, userId);
-    if (!conv) {
-      return;
-    }
-    conv.title = title;
-    conv.updated_at = new Date().toISOString();
-    await writeFile(this.convPath(userId, convId), JSON.stringify(conv, null, 2));
+    await this.withLock(`${userId}/${convId}`, async () => {
+      const conv = await this.load(convId, userId);
+      if (!conv) {
+        return;
+      }
+      conv.title = title;
+      conv.updated_at = new Date().toISOString();
+      await this.atomicWrite(this.convPath(userId, convId), JSON.stringify(conv, null, 2));
+    });
   }
 }

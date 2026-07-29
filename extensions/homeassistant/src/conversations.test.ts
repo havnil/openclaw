@@ -101,4 +101,25 @@ describe("ConversationStore", () => {
     const list = await store.list("havnil");
     expect(list).toHaveLength(1);
   });
+
+  it("serializes concurrent appendMessage calls without losing messages or corrupting the file", async () => {
+    const conv = await store.create("havnil");
+    const N = 20;
+    const writes = Array.from({ length: N }, (_, i) =>
+      store.appendMessage(conv.id, "havnil", {
+        role: i % 2 === 0 ? "user" : "assistant",
+        text: `msg-${i}`,
+        timestamp: new Date().toISOString(),
+      }),
+    );
+    await Promise.all(writes);
+
+    const loaded = await store.load(conv.id, "havnil");
+    expect(loaded).not.toBeNull();
+    expect(loaded!.messages).toHaveLength(N);
+    const texts = new Set(loaded!.messages.map((m) => m.text));
+    for (let i = 0; i < N; i++) {
+      expect(texts.has(`msg-${i}`)).toBe(true);
+    }
+  });
 });
