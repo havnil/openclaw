@@ -2249,6 +2249,9 @@ export const ar: TranslationMap = {
     targetLabel: "عنوان URL أو أمر",
     nameInvalid: "تستخدم أسماء الخوادم الأحرف والأرقام والنقاط والشرطات أو الشرطات السفلية.",
     targetInvalid: "أدخل عنوان URL لعمليات نقل HTTP أو سطر أوامر صالحًا لـ stdio.",
+    sessionEnableFailed: "تم حفظ الخادم معطلاً بشكل عام، لكن تعذّر تفعيله لهذه الجلسة: {error}",
+    sessionChanged: "تغيّرت الجلسة النشطة قبل أن يتسنى تفعيلها.",
+    sessionUnavailable: "الجلسة النشطة غير متاحة؛ قم بالتحديث وحاول مرة أخرى.",
     nameTaken: "يوجد بالفعل خادم MCP باسم ”{name}“.",
     missing: "لم يتم العثور على خادم MCP ”{name}“ في الإعدادات.",
     missingTransport: "وسيلة النقل مفقودة",
@@ -2708,6 +2711,11 @@ export const ar: TranslationMap = {
       title: "بحث الأدوات",
       description:
         "أبقِ دليل أدوات محدوداً مرئياً وأجّل البقية خلف البحث، حتى تتوقف كتالوجات MCP والمكوّنات الإضافية الكبيرة عن ازدحام الطلب.",
+    },
+    loopDetection: {
+      title: "اكتشاف حلقات الأدوات",
+      description:
+        "تفعيل واقيات السجل المتجدد التي تحذّر أو تحظر استدعاءات الأدوات المتكررة عندما يتوقف الوكيل عن إحراز تقدم.",
     },
     localModelLean: {
       title: "أدوات مبسّطة للنماذج المحلية",
@@ -3732,12 +3740,12 @@ export const ar: TranslationMap = {
       loadingPage: "جارٍ تحميل صفحة الويكي…",
       dreamsTab: "الأحلام",
       insightsTab: "الرؤى المستوردة",
-      palaceTab: "قصر الذاكرة",
+      wikiTab: "ويكي الذاكرة",
       dreamsExplainer:
         "هذه هي يوميات الأحلام الأولية التي يكتبها النظام أثناء إعادة تشغيل الذاكرة ودمجها؛ استخدمها لفحص ما يلاحظه نظام الذاكرة والمواضع التي لا تزال تبدو مشوشة أو شحيحة.",
       insightsExplainer:
         "هذه رؤى مستوردة جُمعت في مجموعات من السجل الخارجي؛ استخدمها لمراجعة ما أظهرته عمليات الاستيراد قبل أن ينتقل أي منها إلى الذاكرة الدائمة.",
-      palaceExplainer:
+      wikiExplainer:
         "هذه هي واجهة ويكي الذاكرة المجمّعة التي يمكن للنظام البحث فيها والاستدلال بناءً عليها؛ استخدمها لفحص صفحات الذاكرة الفعلية والادعاءات والأسئلة المفتوحة والتناقضات بدلًا من محادثات المصدر الأولية المستوردة.",
       copyArchivePath: "نسخ مسار الأرشيف",
       loadingInsights: "جارٍ تحميل الرؤى المستوردة…",
@@ -3752,9 +3760,9 @@ export const ar: TranslationMap = {
       riskReasons: "أسباب المخاطر:",
       labels: "التسميات:",
       openSourcePage: "فتح صفحة المصدر",
-      loadingPalace: "جارٍ تحميل قصر الذاكرة…",
-      emptyPalace: "لم تتم تعبئة قصر الذاكرة بعد",
-      emptyPalaceHint:
+      loadingWiki: "جارٍ تحميل ويكي الذاكرة…",
+      emptyWiki: "لم تتم تعبئة ويكي الذاكرة بعد",
+      emptyWikiHint:
         "تحتوي الويكي حاليًا في الغالب على عمليات استيراد المصادر الخام والتقارير التشغيلية. ستصبح علامة التبويب هذه مفيدة بمجرد البدء في كتابة التوليفات أو الكيانات أو المفاهيم.",
       claims: "الادعاءات",
       openQuestions: "الأسئلة المفتوحة",
@@ -3830,7 +3838,7 @@ export const ar: TranslationMap = {
       tidyingKnowledgeGraph: "جارٍ ترتيب الرسم البياني للمعرفة…",
       replayingConversations: "جارٍ إعادة تشغيل محادثات اليوم…",
       weavingShortTerm: "جارٍ نسج قصير الأجل في طويل الأجل…",
-      defragmentingMindPalace: "جارٍ إلغاء تجزئة قصر العقل…",
+      defragmentingMemoryLane: "جارٍ إلغاء تجزئة ممر الذاكرة…",
       filingLooseThoughts: "جارٍ أرشفة الأفكار المتناثرة…",
       connectingDots: "جارٍ وصل النقاط البعيدة…",
       compostingContext: "جارٍ تدوير نوافذ السياق القديمة…",
@@ -5014,7 +5022,21 @@ export const ar: TranslationMap = {
         manageSkills: "إدارة المهارات",
         browseConnectors: "استعراض الموصلات",
         addMcpServer: "إضافة خادم MCP…",
-        toolAccess: "الوصول إلى الأدوات",
+        addMcpServerTitle: "إضافة خادم MCP",
+        addMcpServerDescription: "قم بتكوين الخادم واختر مكان تفعيله.",
+        scopeLabel: "التوفر",
+        scopeSession: "هذه الجلسة",
+        scopeEverywhere: "في كل مكان",
+        scopeSessionHint: "يتم حفظ الخادم معطلاً بشكل عام وتفعيله لهذه الجلسة فقط.",
+        scopeEverywhereHint: "يتم حفظ الخادم وتفعيله لكل جلسة.",
+        toolAccess: {
+          label: "الوصول إلى الأدوات",
+          loading: "جارٍ تحميل الأدوات…",
+          loadFailed: "تعذّر تحميل الأدوات.",
+          noTools: "لا توجد أدوات متاحة لهذا الموصّل.",
+          summary: "{enabled} من {total} أداة مفعّلة",
+          summaryOne: "{enabled} من {total} أداة قيد التشغيل",
+        },
         enabledCount: "{count} مُفعَّل",
         loadingSkills: "جارٍ تحميل المهارات…",
         skillsLoadFailed: "تعذّر تحميل المهارات.",

@@ -2282,6 +2282,10 @@ export const vi: TranslationMap = {
     targetLabel: "URL hoặc lệnh",
     nameInvalid: "Tên máy chủ chỉ dùng chữ cái, số, dấu chấm, dấu gạch ngang hoặc dấu gạch dưới.",
     targetInvalid: "Nhập URL cho các giao thức HTTP hoặc một dòng lệnh hợp lệ cho stdio.",
+    sessionEnableFailed:
+      "Máy chủ đã được lưu và tắt trên toàn cục, nhưng không thể bật cho phiên này: {error}",
+    sessionChanged: "Phiên hoạt động đã thay đổi trước khi có thể bật.",
+    sessionUnavailable: "Phiên hoạt động không khả dụng; hãy làm mới và thử lại.",
     nameTaken: "Đã tồn tại một máy chủ MCP có tên “{name}”.",
     missing: "Không tìm thấy máy chủ MCP “{name}” trong cấu hình.",
     missingTransport: "thiếu transport",
@@ -2753,6 +2757,11 @@ export const vi: TranslationMap = {
       title: "Tìm kiếm công cụ",
       description:
         "Giữ một danh mục công cụ giới hạn hiển thị và trì hoãn phần còn lại sau tìm kiếm, để các danh mục MCP và plugin lớn không còn chiếm chỗ trong prompt.",
+    },
+    loopDetection: {
+      title: "Phát hiện vòng lặp công cụ",
+      description:
+        "Bật cơ chế bảo vệ theo lịch sử cuộn để cảnh báo hoặc chặn các lệnh gọi công cụ lặp lại khi một agent ngừng tiến triển.",
     },
     localModelLean: {
       title: "Công cụ tinh gọn cho mô hình cục bộ",
@@ -3784,12 +3793,12 @@ export const vi: TranslationMap = {
       loadingPage: "Đang tải trang wiki…",
       dreamsTab: "Giấc mơ",
       insightsTab: "Thông tin đã nhập",
-      palaceTab: "Cung điện ký ức",
+      wikiTab: "Wiki Bộ nhớ",
       dreamsExplainer:
         "Đây là nhật ký giấc mơ thô mà hệ thống ghi lại trong khi phát lại và củng cố ký ức; dùng nó để kiểm tra những gì hệ thống ký ức đang nhận thấy, và nơi nó vẫn còn nhiễu hoặc thưa thớt.",
       insightsExplainer:
         "Đây là những thông tin đã nhập được gom cụm từ lịch sử bên ngoài; dùng chúng để xem xét những gì các lần nhập đã đưa ra trước khi bất kỳ điều gì trở thành ký ức bền vững.",
-      palaceExplainer:
+      wikiExplainer:
         "Đây là bề mặt wiki ký ức đã biên dịch mà hệ thống có thể tìm kiếm và suy luận; dùng nó để kiểm tra các trang ký ức thực tế, các khẳng định, câu hỏi mở và mâu thuẫn thay vì các cuộc trò chuyện nguồn thô đã nhập.",
       copyArchivePath: "Sao chép đường dẫn lưu trữ",
       loadingInsights: "Đang tải thông tin đã nhập…",
@@ -3805,9 +3814,9 @@ export const vi: TranslationMap = {
       riskReasons: "Lý do rủi ro:",
       labels: "Nhãn:",
       openSourcePage: "Mở trang nguồn",
-      loadingPalace: "Đang tải cung điện ký ức…",
-      emptyPalace: "Cung điện ký ức chưa được điền dữ liệu",
-      emptyPalaceHint:
+      loadingWiki: "Đang tải wiki bộ nhớ…",
+      emptyWiki: "Wiki bộ nhớ chưa có nội dung",
+      emptyWikiHint:
         "Hiện tại wiki chủ yếu chứa các bản nhập nguồn thô và báo cáo vận hành. Tab này sẽ trở nên hữu ích khi các bản tổng hợp, thực thể hoặc khái niệm bắt đầu được ghi lại.",
       claims: "Tuyên bố",
       openQuestions: "Câu hỏi mở",
@@ -3884,7 +3893,7 @@ export const vi: TranslationMap = {
       tidyingKnowledgeGraph: "đang sắp xếp đồ thị tri thức…",
       replayingConversations: "đang phát lại các cuộc trò chuyện hôm nay…",
       weavingShortTerm: "đang đan ngắn hạn vào dài hạn…",
-      defragmentingMindPalace: "đang chống phân mảnh cung điện tâm trí…",
+      defragmentingMemoryLane: "đang chống phân mảnh dòng ký ức…",
       filingLooseThoughts: "đang lưu trữ những suy nghĩ rời rạc…",
       connectingDots: "đang kết nối các điểm xa nhau…",
       compostingContext: "đang ủ các cửa sổ ngữ cảnh cũ…",
@@ -5077,7 +5086,21 @@ export const vi: TranslationMap = {
         manageSkills: "Quản lý Skills",
         browseConnectors: "Duyệt trình kết nối",
         addMcpServer: "Thêm máy chủ MCP…",
-        toolAccess: "Quyền truy cập công cụ",
+        addMcpServerTitle: "Thêm máy chủ MCP",
+        addMcpServerDescription: "Cấu hình máy chủ và chọn nơi bật máy chủ.",
+        scopeLabel: "Khả dụng",
+        scopeSession: "Phiên này",
+        scopeEverywhere: "Mọi nơi",
+        scopeSessionHint: "Máy chủ được lưu tắt trên toàn cục và chỉ bật cho phiên này.",
+        scopeEverywhereHint: "Máy chủ được lưu và bật cho mọi phiên.",
+        toolAccess: {
+          label: "Quyền truy cập công cụ",
+          loading: "Đang tải công cụ…",
+          loadFailed: "Không thể tải công cụ.",
+          noTools: "Không có công cụ nào khả dụng cho trình kết nối này.",
+          summary: "{enabled} trên {total} công cụ đang bật",
+          summaryOne: "{enabled} trên {total} công cụ đang bật",
+        },
         enabledCount: "{count} bật",
         loadingSkills: "Đang tải Skills…",
         skillsLoadFailed: "Không thể tải Skills.",
