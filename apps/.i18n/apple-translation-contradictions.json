@@ -2347,10 +2347,19 @@
       ]
     },
     {
+      "locale": "ru",
+      "source": "Details",
+      "translations": [
+        "Подробности",
+        "Сведения"
+      ]
+    },
+    {
       "locale": "uk",
       "source": "Details",
       "translations": [
         "Відомості",
+        "Деталі",
         "Докладно"
       ]
     },
@@ -7023,9 +7032,18 @@
       ]
     },
     {
+      "locale": "de",
+      "source": "Pause",
+      "translations": [
+        "Pause",
+        "Pausieren"
+      ]
+    },
+    {
       "locale": "fa",
       "source": "Pause",
       "translations": [
+        "توقف",
         "توقف موقت",
         "مکث"
       ]
@@ -7035,7 +7053,120 @@
       "source": "Pause",
       "translations": [
         "Mettre en pause",
+        "Pause",
         "Suspendre"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Pause",
+      "translations": [
+        "Metti in pausa",
+        "Pausa"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Pause",
+      "translations": [
+        "일시 중지",
+        "일시정지"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Pause",
+      "translations": [
+        "Пауза",
+        "Приостановить"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translations": [
+        "أوقف وضع التحدث مؤقتًا قبل تشغيل هذا المرفق.",
+        "أوقف وضع المحادثة مؤقتًا قبل تشغيل هذا المرفق."
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translations": [
+        "قبل از پخش این پیوست، حالت گفتگو را متوقف کنید.",
+        "پیش از پخش این پیوست، حالت Talk را متوقف کنید."
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translations": [
+        "Mettez le mode Talk en pause avant de lire cette pièce jointe.",
+        "Suspendez le mode Talk avant de lire cette pièce jointe."
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translations": [
+        "この添付ファイルを再生する前にTalkモードを一時停止してください。",
+        "この添付ファイルを再生する前にトークモードを一時停止してください。"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translations": [
+        "이 첨부 파일을 재생하기 전에 Talk 모드를 일시 중지하세요.",
+        "이 첨부 파일을 재생하기 전에 Talk 모드를 일시정지하세요."
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translations": [
+        "Pauzeer Talk-modus voordat je deze bijlage afspeelt.",
+        "Pauzeer de spraakmodus voordat je deze bijlage afspeelt."
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translations": [
+        "Приостановите режим Talk перед воспроизведением этого вложения.",
+        "Приостановите режим разговора перед воспроизведением этого вложения."
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translations": [
+        "หยุด Talk mode ชั่วคราวก่อนเล่นสิ่งที่แนบนี้",
+        "หยุดโหมด Talk ชั่วคราวก่อนเล่นไฟล์แนบนี้"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translations": [
+        "Призупиніть режим розмови перед відтворенням цього вкладення.",
+        "Призупиніть режим розмови, перш ніж відтворювати це вкладення."
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translations": [
+        "播放此附件前请先暂停 Talk 模式。",
+        "播放此附件前请暂停 Talk 模式。"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translations": [
+        "播放此附件前請先暫停 Talk 模式。",
+        "播放此附件前請先暫停語音模式。"
       ]
     },
     {
@@ -10341,7 +10472,8 @@
       "source": "Voice note",
       "translations": [
         "Voice note",
-        "वॉइस नोट"
+        "वॉइस नोट",
+        "वॉयस नोट"
       ]
     },
     {
@@ -10453,7 +10585,8 @@
       "source": "Voice note",
       "translations": [
         "Voice note",
-        "语音消息"
+        "语音消息",
+        "语音留言"
       ]
     },
     {
@@ -10461,7 +10594,8 @@
       "source": "Voice note",
       "translations": [
         "Voice note",
-        "語音留言"
+        "語音留言",
+        "語音訊息"
       ]
     },
     {
