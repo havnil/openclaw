@@ -51,6 +51,23 @@ const DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS = 120_000;
 let modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
 
 const owners = new Map<string, PreparedModelRuntimeOwner>();
+
+/**
+ * Rebind to a committed configured owner only when one exists. Dynamic
+ * (auto-provisioned) agents — e.g. per-user channel agents — have no
+ * configured owner, so an unconditional rebind after a replacement gate
+ * throws PreparedModelRuntimeOwnerNotPublishedError for every load. Keep
+ * the original input and let the standalone activation path handle them,
+ * matching the configured-owner guard already used for configless setup.
+ */
+function rebindInputToCommittedConfiguredOwnerIfPresent(
+  ownersMap: Map<string, PreparedModelRuntimeOwner>,
+  input: PreparedModelRuntimeInput,
+): PreparedModelRuntimeInput {
+  return hasConfiguredOwnerMatching(ownersMap, input)
+    ? rebindInputToCommittedConfiguredOwner(ownersMap, input)
+    : input;
+}
 const agentBuildCompletions = new Map<string, Promise<void>>();
 const standaloneActivationTails = new Map<string, Promise<void>>();
 let retainedDirectRunOwner: { key: string; owner: PreparedModelRuntimeOwner } | undefined;
@@ -77,7 +94,7 @@ export async function loadPreparedModelRuntimeSnapshot(
       if (pendingModelRuntimeReplacement) {
         continue;
       }
-      input = rebindInputToCommittedConfiguredOwner(owners, input);
+      input = rebindInputToCommittedConfiguredOwnerIfPresent(owners, input);
       continue;
     }
     try {
@@ -93,7 +110,7 @@ export async function loadPreparedModelRuntimeSnapshot(
       if (pendingModelRuntimeReplacement) {
         continue;
       }
-      input = rebindInputToCommittedConfiguredOwner(owners, input);
+      input = rebindInputToCommittedConfiguredOwnerIfPresent(owners, input);
       continue;
     }
     const activated = await activateStandalonePreparedModelRuntime(input);
@@ -103,7 +120,7 @@ export async function loadPreparedModelRuntimeSnapshot(
       if (pendingModelRuntimeReplacement) {
         continue;
       }
-      input = rebindInputToCommittedConfiguredOwner(owners, input);
+      input = rebindInputToCommittedConfiguredOwnerIfPresent(owners, input);
       continue;
     }
     if (!activated) {
@@ -273,7 +290,7 @@ async function acquirePreparedModelRuntimeLease(
         continue;
       }
       if (provenance === "run") {
-        input = rebindInputToCommittedConfiguredOwner(owners, input);
+        input = rebindInputToCommittedConfiguredOwnerIfPresent(owners, input);
         key = ownerKey(input);
       }
       continue;
@@ -288,7 +305,7 @@ async function acquirePreparedModelRuntimeLease(
       // explicitly pinned workspace may differ from the configured owner. A stale leased owner
       // can share this key, so rebase its input before publishing a replacement generation.
       try {
-        input = rebindInputToCommittedConfiguredOwner(owners, input);
+        input = rebindInputToCommittedConfiguredOwnerIfPresent(owners, input);
         key = ownerKey(input);
         existing = owners.get(key);
         staleDynamicOwner =
