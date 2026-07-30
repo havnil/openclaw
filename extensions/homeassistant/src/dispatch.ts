@@ -4,10 +4,19 @@ import {
   dispatchInboundMessage,
   finalizeInboundContext,
 } from "openclaw/plugin-sdk/reply-runtime";
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveHaAgentId } from "./agent-routing.js";
 import type { HaDispatchFn } from "./channel.js";
 
 export async function runHaDispatch(params: Parameters<HaDispatchFn>[0]): Promise<void> {
+  // WS message events inherit the (long-released) admission of the original
+  // WebSocket upgrade request; dispatching on that inherited chain is refused
+  // with GatewayDrainingError as if the gateway were draining. Re-enter an
+  // independent gateway work root per inbound message instead.
+  return await runDetachedWebhookWork(() => runHaDispatchAdmitted(params));
+}
+
+async function runHaDispatchAdmitted(params: Parameters<HaDispatchFn>[0]): Promise<void> {
   const { cfg, user, text, conversationId, onToken, onToolActivity, onDone, onError } = params;
 
   const agentId = resolveHaAgentId(user);

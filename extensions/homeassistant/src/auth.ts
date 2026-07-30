@@ -10,8 +10,11 @@ export interface HandshakeParams {
 
 export type HandshakeResult = { ok: true; user: HaUserIdentity } | { ok: false; error: string };
 
-export function isAdmin(userId: string, admins: string[]): boolean {
-  return admins.includes(userId);
+export function isAdmin(userId: string, admins: string[] | string): boolean {
+  // Tolerate a bare string in config (`admins: "id"`) — a silent false here
+  // demotes the owner to a per-user agent without any visible error.
+  const list = Array.isArray(admins) ? admins : [admins];
+  return list.includes(userId);
 }
 
 export function verifyHandshake(params: HandshakeParams): HandshakeResult {

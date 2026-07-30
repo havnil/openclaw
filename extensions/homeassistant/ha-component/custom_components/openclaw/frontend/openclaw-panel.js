@@ -1405,7 +1405,12 @@ class OpenClawPanel extends HTMLElement {
 
   // Open (or reuse) an SSE stream for a given conversation.
   _ensureStream(convId) {
-    if (this._es && this._esConv === convId) return;
+    // A browser permanently closes an EventSource on non-retryable HTTP
+    // responses (e.g. 503 while the gateway restarts). A CLOSED stream must
+    // never satisfy the reuse check, or the panel keeps a dead object and
+    // silently stops receiving live events forever.
+    var isLive = this._es && this._es.readyState !== EventSource.CLOSED;
+    if (isLive && this._esConv === convId) return;
     if (this._es) this._es.close();
     this._esConv = convId;
     var url =
@@ -1420,8 +1425,19 @@ class OpenClawPanel extends HTMLElement {
       self._setConn("connected");
     };
     this._es.onerror = function () {
-      // EventSource auto-reconnects; just reflect the transient state.
+      // EventSource auto-reconnects on transient errors; reflect the state.
       self._setConn("connecting");
+      // But on non-retryable responses the browser closes it for good —
+      // recreate with a short backoff so the stream always comes back.
+      if (self._es && self._es.readyState === EventSource.CLOSED) {
+        var deadConv = self._esConv;
+        self._es = null;
+        self._esConv = null;
+        setTimeout(function () {
+          var current = self._activeConvId || deadConv;
+          if (current) self._ensureStream(current);
+        }, 3000);
+      }
     };
     this._es.onmessage = function (ev) {
       var e;
@@ -1452,9 +1468,16 @@ class OpenClawPanel extends HTMLElement {
     if (!this._renderTimer) {
       var self = this;
       this._renderTimer = requestAnimationFrame(function () {
-        self._streamEl.innerHTML = renderMarkdown(self._streamText);
+        // The stream element can be torn down (done/error/conversation switch)
+        // between scheduling and this frame — especially during SSE replay
+        // bursts where token+done arrive together. A crash here breaks the
+        // whole panel (uncaught in WebKit), so guard every deferred access.
         self._renderTimer = null;
-        self._messagesEl.scrollTop = self._messagesEl.scrollHeight;
+        if (!self._streamEl) return;
+        self._streamEl.innerHTML = renderMarkdown(self._streamText);
+        if (self._messagesEl) {
+          self._messagesEl.scrollTop = self._messagesEl.scrollHeight;
+        }
       });
     }
   }
@@ -1484,11 +1507,21 @@ class OpenClawPanel extends HTMLElement {
 
   _onStreamDone(fullText) {
     this._clearWatchdog();
-    if (this._streamEl && (this._streamText || this._streamToolCount)) {
+    // The done event must PAINT the final text itself — never rely on a
+    // pending rAF, which early-returns after teardown and leaves the
+    // message blank until the conversation is reloaded.
+    if (this._renderTimer) {
+      cancelAnimationFrame(this._renderTimer);
+      this._renderTimer = null;
+    }
+    var finalText = fullText || this._streamText;
+    if (this._streamEl) {
+      this._streamEl.innerHTML = renderMarkdown(finalText);
+      if (this._messagesEl) this._messagesEl.scrollTop = this._messagesEl.scrollHeight;
       if (this._messageCache[this._activeConvId]) {
         this._messageCache[this._activeConvId].push({
           role: "assistant",
-          content: this._streamText,
+          content: finalText,
           tool_count: this._streamToolCount || 0,
         });
       }
@@ -1497,7 +1530,6 @@ class OpenClawPanel extends HTMLElement {
     this._thinkingEl = null;
     this._streamText = "";
     this._streamToolCount = 0;
-    this._renderTimer = null;
   }
 
   _onStreamError(error) {
@@ -1548,8 +1580,11 @@ class OpenClawPanel extends HTMLElement {
       });
       var msgs = (res && res.messages) || [];
       for (var i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].role === "assistant" && msgs[i].content) {
-          content = msgs[i].content;
+        // Stored messages use `text`; older protocol shapes used `content`.
+        // Reading only `content` made watchdog recovery permanently blind.
+        var body = msgs[i].text || msgs[i].content;
+        if (msgs[i].role === "assistant" && body) {
+          content = body;
           break;
         }
       }
@@ -1616,4 +1651,10 @@ class OpenClawPanel extends HTMLElement {
     if (this._es) this._es.close();
   }
 }
-customElements.define("openclaw-panel", OpenClawPanel);
+// Guard: HA can re-import this module (e.g. after a version bump) into a page
+// where a previous version already registered the element. Re-defining throws
+// and kills the whole module; the existing element keeps working until a full
+// frontend reload picks up this file exclusively.
+if (!customElements.get("openclaw-panel")) {
+  customElements.define("openclaw-panel", OpenClawPanel);
+}
