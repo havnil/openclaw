@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { HaDispatchFn, HaTranscribeFn } from "./channel.js";
-import type { ConversationStore } from "./conversations.js";
+import { generateTitle, type ConversationStore } from "./conversations.js";
 import type { HaUserIdentity, StoredMessage } from "./protocol.js";
 import { StreamHub } from "./stream-hub.js";
 
@@ -13,6 +13,8 @@ export type HaHttpApiDeps = {
   getSecret: () => string;
   getCfg: () => unknown;
   resolveUser: (body: Record<string, unknown>) => HaUserIdentity;
+  /** Mirrors a conversation title onto the gateway session label; must never reject. */
+  labelSession?: (user: HaUserIdentity, conversationId: string, title: string) => Promise<void>;
 };
 
 export type HaHttpApi = {
@@ -248,6 +250,7 @@ async function handleSend(
         const title = generateTitle(text);
         await store.rename(convId, user.user_id, title);
         deps.hub.publish(convId, { type: "title", title });
+        await deps.labelSession?.(user, convId, title);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -338,6 +341,7 @@ async function handleConversations(
       const convId = typeof body.conversation_id === "string" ? body.conversation_id : "";
       const title = typeof body.title === "string" ? body.title : "";
       await store.rename(convId, userId, title);
+      await deps.labelSession?.(deps.resolveUser(body), convId, title);
       json(res, 200, { renamed: true });
       break;
     }
@@ -386,16 +390,6 @@ async function handleTranscribe(
   }
 }
 
-function generateTitle(text: string): string {
-  const cleaned = text.replace(/\s+/g, " ").trim();
-  if (cleaned.length <= 40) {
-    return cleaned;
-  }
-  const truncated = cleaned.slice(0, 40);
-  const lastSpace = truncated.lastIndexOf(" ");
-  return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + "...";
-}
-
 const BASE = "/api/homeassistant";
 
 export function createHaHttpApi(deps: HaHttpApiDeps): HaHttpApi {
@@ -403,7 +397,7 @@ export function createHaHttpApi(deps: HaHttpApiDeps): HaHttpApi {
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const url = req.url ?? "";
-    const path = url.split("?")[0];
+    const path = url.split("?")[0] ?? url;
 
     if (!path.startsWith(BASE)) {
       return false;

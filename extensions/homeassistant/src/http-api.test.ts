@@ -49,6 +49,7 @@ describe("HA HTTP API", () => {
     p.onDone("hei");
   });
   const transcribeFake = vi.fn(async (_p: any) => ({ text: "hello" }));
+  const labelSession = vi.fn(async () => {});
   const mk = () =>
     createHaHttpApi({
       hub: new StreamHub(),
@@ -58,6 +59,7 @@ describe("HA HTTP API", () => {
       getCfg: () => ({}),
       resolveUser: () => ({ user_id: "havnil", user_name: "Havard", is_admin: true }) as any,
       getTranscribe: () => transcribeFake as any,
+      labelSession,
     });
 
   it("rejects a wrong secret with 401", async () => {
@@ -119,6 +121,33 @@ describe("HA HTTP API", () => {
     await vi.waitFor(() => expect(events.find((e) => e.type === "title")).toBeDefined());
     const titleEvent = events.find((e) => e.type === "title");
     expect(titleEvent).toMatchObject({ type: "title", title: "lights on" });
+    // Auto-title also mirrors the title onto the gateway session label.
+    expect(labelSession).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: "havnil" }),
+      "c1",
+      "lights on",
+    );
+  });
+
+  it("POST /conversations rename mirrors the title to the session label", async () => {
+    const api = mk();
+    const { res } = mkRes();
+    await api.handle(
+      mkReq("POST", "/api/homeassistant/conversations", {
+        action: "rename",
+        user_id: "havnil",
+        conversation_id: "c9",
+        title: "Boiler schedule",
+      }),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(store.rename).toHaveBeenCalledWith("c9", "havnil", "Boiler schedule");
+    expect(labelSession).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: "havnil" }),
+      "c9",
+      "Boiler schedule",
+    );
   });
 
   it("POST /transcribe returns text from transcribe fn", async () => {

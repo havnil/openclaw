@@ -12,6 +12,17 @@ export interface Conversation {
   messages: StoredMessage[];
 }
 
+/** Derives a short conversation title from the first user message (~40 chars, word boundary). */
+export function generateTitle(text: string): string {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  if (cleaned.length <= 40) {
+    return cleaned;
+  }
+  const truncated = cleaned.slice(0, 40);
+  const lastSpace = truncated.lastIndexOf(" ");
+  return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + "...";
+}
+
 export class ConversationStore {
   // Per-conversation write-lock chain: prevents concurrent read-modify-write
   // calls from clobbering each other (or producing concatenated-garbage files

@@ -14,7 +14,7 @@ import {
   setHaDispatch,
   setHaTranscribe,
 } from "./src/channel.js";
-import { runHaDispatch } from "./src/dispatch.js";
+import { labelHaSessionThread, runHaDispatch } from "./src/dispatch.js";
 import { createHaHttpApi } from "./src/http-api.js";
 import { buildHaPrependContext } from "./src/memory-guidance.js";
 import type { HaUserIdentity } from "./src/protocol.js";
@@ -129,6 +129,7 @@ function registerFull(api: OpenClawPluginApi): void {
     // getHaTranscribe returns the live function wired above via setHaTranscribe
     getTranscribe: () => getHaTranscribe(),
     resolveUser: (body) => resolveUser(body, api.config),
+    labelSession: labelHaSessionThread,
   });
 
   // Plugin auth: the handler performs its own secret check inside haApi.

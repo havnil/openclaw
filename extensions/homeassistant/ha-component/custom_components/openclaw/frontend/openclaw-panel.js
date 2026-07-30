@@ -1637,10 +1637,15 @@ class OpenClawPanel extends HTMLElement {
       this._renderConvList();
       // API responded — we are reachable even without an SSE stream.
       this._setConn("connected");
-      // Open a fresh chat by default; past chats stay available in the sidebar.
+      // Resume the most recent conversation so reopening the panel does not
+      // mint a new gateway session per visit; "New chat" stays one tap away.
       if (!this._activeConvId) {
-        this._topTitle.textContent = "New Chat";
-        this._renderMessages();
+        if (this._conversations.length > 0) {
+          this._setActiveConv(this._conversations[0].id);
+        } else {
+          this._topTitle.textContent = "New Chat";
+          this._renderMessages();
+        }
       }
     } catch (e) {
       this._setConn("disconnected");

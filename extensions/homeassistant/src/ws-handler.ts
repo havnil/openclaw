@@ -3,7 +3,7 @@ import { URL } from "node:url";
 import type { WebSocket } from "ws";
 import { verifyHandshake } from "./auth.js";
 import { getHaTranscribe } from "./channel.js";
-import { ConversationStore } from "./conversations.js";
+import { ConversationStore, generateTitle } from "./conversations.js";
 import type { HaUserIdentity, StoredMessage } from "./protocol.js";
 
 export interface HaWsHandlerDeps {
@@ -29,20 +29,6 @@ function send(ws: WebSocket, msg: Record<string, unknown>): void {
   if (ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify(msg));
   }
-}
-
-/**
- * Generate a short conversation title from the first user message.
- * Truncates to ~40 chars at a word boundary.
- */
-function generateTitle(userText: string): string {
-  const cleaned = userText.replace(/\s+/g, " ").trim();
-  if (cleaned.length <= 40) {
-    return cleaned;
-  }
-  const truncated = cleaned.slice(0, 40);
-  const lastSpace = truncated.lastIndexOf(" ");
-  return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + "...";
 }
 
 export function handleHaWebSocket(
