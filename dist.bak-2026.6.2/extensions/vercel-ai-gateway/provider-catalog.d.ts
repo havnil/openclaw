@@ -1,2 +1,0 @@
-import { n as buildVercelAiGatewayProvider, t as buildStaticVercelAiGatewayProvider } from "../../provider-catalog-CpHRwp2_.js";
-export { buildStaticVercelAiGatewayProvider, buildVercelAiGatewayProvider };

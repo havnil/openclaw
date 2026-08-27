@@ -1,3 +1,0 @@
-import { a as detectLegacyMatrixCrypto, i as autoPrepareLegacyMatrixCrypto, n as hasPendingMatrixMigration, o as autoMigrateLegacyMatrixState, r as resolveMatrixMigrationStatus, s as detectLegacyMatrixState, t as hasActionableMatrixMigration } from "../../matrix-migration.runtime-HjBYF-Do.js";
-import { t as maybeCreateMatrixMigrationSnapshot } from "../../migration-snapshot-backup-B3kTguEe.js";
-export { autoMigrateLegacyMatrixState, autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto, detectLegacyMatrixState, hasActionableMatrixMigration, hasPendingMatrixMigration, maybeCreateMatrixMigrationSnapshot, resolveMatrixMigrationStatus };

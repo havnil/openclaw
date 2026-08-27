@@ -1,7 +1,0 @@
-import { S as MarkdownTableMode } from "./types.base-D238NWJT.js";
-import { n as ResolveMarkdownTableModeParams } from "./markdown-tables.types-Cxnsmv2E.js";
-
-//#region src/config/markdown-tables.d.ts
-declare function resolveMarkdownTableMode(params: ResolveMarkdownTableModeParams): MarkdownTableMode;
-//#endregion
-export { resolveMarkdownTableMode as t };
