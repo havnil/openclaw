@@ -14,22 +14,22 @@
 
 ### OpenClaw Plugin (`extensions/homeassistant/`)
 
-| File                        | Responsibility                                                             |
-| --------------------------- | -------------------------------------------------------------------------- |
-| `index.ts`                  | Plugin entry — registers tools AND channel via `defineChannelPluginEntry`  |
-| `src/channel.ts`            | Channel plugin definition — WebSocket route, auth, message dispatch        |
-| `src/ws-handler.ts`         | WebSocket connection handler — handshake, message routing, streaming       |
-| `src/auth.ts`               | Auth + permission logic — secret verification, admin check, tool filtering |
-| `src/conversations.ts`      | Conversation CRUD — create, load, list, delete, auto-title                 |
-| `src/protocol.ts`           | WebSocket protocol types — all message type definitions                    |
-| `src/tool-filter.ts`        | Tool filtering — restricted tool set for standard users                    |
-| `openclaw.plugin.json`      | Updated manifest with channel + config schema                              |
-| `package.json`              | Updated with new deps                                                      |
-| `src/channel.test.ts`       | Unit tests for channel registration                                        |
-| `src/ws-handler.test.ts`    | Unit tests for WebSocket handler                                           |
-| `src/auth.test.ts`          | Unit tests for auth + permissions                                          |
-| `src/conversations.test.ts` | Unit tests for conversation CRUD                                           |
-| `src/tool-filter.test.ts`   | Unit tests for tool filtering                                              |
+| File                        | Responsibility                                                                                                   |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `index.ts`                  | Plugin entry — registers tools AND channel via `defineChannelPluginEntry`                                        |
+| `src/channel.ts`            | Channel plugin definition — WebSocket route, auth, message dispatch                                              |
+| `src/ws-handler.ts`         | WebSocket connection handler — handshake, message routing, streaming                                             |
+| `src/auth.ts`               | Auth + permission logic — secret verification, admin check, tool filtering                                       |
+| `src/conversations.ts`      | Conversation CRUD — create, load, list, delete, auto-title                                                       |
+| `src/protocol.ts`           | WebSocket protocol types — all message type definitions                                                          |
+| ~~`src/tool-filter.ts`~~    | REMOVED 2026-10-05 — dead code; per-user restriction = per-agent tool policy (`agents.entries.<id>.tools.allow`) |
+| `openclaw.plugin.json`      | Updated manifest with channel + config schema                                                                    |
+| `package.json`              | Updated with new deps                                                                                            |
+| `src/channel.test.ts`       | Unit tests for channel registration                                                                              |
+| `src/ws-handler.test.ts`    | Unit tests for WebSocket handler                                                                                 |
+| `src/auth.test.ts`          | Unit tests for auth + permissions                                                                                |
+| `src/conversations.test.ts` | Unit tests for conversation CRUD                                                                                 |
+| `src/tool-filter.test.ts`   | Unit tests for tool filtering                                                                                    |
 
 ### HA Custom Component (`custom_components/openclaw/`)
 
